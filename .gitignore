@@ -1,0 +1,7 @@
+bin/
+obj/
+publish/
+data/
+web/node_modules/
+web/dist/
+*.user

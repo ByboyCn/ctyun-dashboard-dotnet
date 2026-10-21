@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>CtyunDashboard</RootNamespace>
+    <AssemblyName>ctyun-dashboard</AssemblyName>
+
+    <!-- NativeAOT -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>false</StripSymbols>
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Protobuf 传输层（Grpc.Tools 仅做编译期 protoc 代码生成，不引入 gRPC 运行时） -->
+    <PackageReference Include="Google.Protobuf" Version="3.27.4" />
+    <PackageReference Include="Grpc.Tools" Version="2.66.0" PrivateAssets="all" />
+    <!-- SQLite 落盘（SqlSugar 依赖反射 emit 与 NativeAOT 不兼容，改用 AOT 安全的直连层） -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+
+  <!-- MQTT 长连接保活（ydpc-dev：应用户指令改用 MQTTnet，替代手写原生报文实现） -->
+  <ItemGroup>
+    <PackageReference Include="MQTTnet" Version="5.2.0.1603" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="proto\**\*.proto" GrpcServices="None" />
+  </ItemGroup>
+
+  <!-- Ydpc 协议驱动已交付并随解决方案编译（原 TODO 排除已移除 by ydpc-dev 2026-10-20） -->
+
+</Project>

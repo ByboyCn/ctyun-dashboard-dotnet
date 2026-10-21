@@ -1,0 +1,172 @@
+syntax = "proto3";
+package ctyun.api;
+option csharp_namespace = "CtyunDashboard.Api";
+// 唯一契约源：后端 Grpc.Tools 编译期生成；前端 Vite ?raw 导入 + protobuf.js 解析
+// 传输：POST/GET body = 请求消息二进制（application/x-protobuf）；
+//       响应 = Envelope 二进制，data 字段为端点专属消息。
+
+message Envelope { int32 code = 1; string msg = 2; bytes data = 3; }
+message Empty {}
+
+// ===== 认证与用户 =====
+message LoginReq { string username = 1; string password = 2; }
+message UserReply { string id = 1; string username = 2; string role = 3; }
+message ChangePwdReq { string old_pwd = 1; string new_pwd = 2; }
+message UserItem { string id = 1; string username = 2; string role = 3; string created_at = 4; }
+message UserList { repeated UserItem items = 1; }
+message CreateUserReq { string username = 1; string password = 2; string role = 3; }
+message IdReq { string id = 1; }
+message NameReq { string name = 1; }
+message ResetPwdReq { string id = 1; string password = 2; }
+
+// ===== 账号 =====
+message DesktopInfo {
+  string desktop_id = 1; string name = 2; int32 use_status = 3; string use_status_text = 4;
+  string spec = 5; bool keepalive_enabled = 6; bool task_enabled = 7;
+  int32 keepalive_interval = 8; string last_pulse_at = 9;
+  string connect_url = 10;  // 免密直达远程桌面（官方 web 客户端入口）
+  string raw_json = 11;     // 官方接口原始字段（前端详情面板全量展示）
+}
+message TaskProgress { string name = 1; int32 current = 2; int32 total = 3; int32 status = 4; int32 points = 5; }
+message AccountCard {
+  string id = 1; string platform = 2; string name = 3; string user_masked = 4; string owner = 5;
+  bool online = 6; bool keepalive_enabled = 7; int32 pulse_interval = 8;
+  bool auto_sign = 9; bool auto_ai = 10; bool auto_hang = 11; bool auto_redeem = 12;
+  int32 points = 13; int32 hang_minutes_today = 14;
+  string last_sign_time = 15; string last_ai_time = 16; string last_hang_time = 17;
+  string status_text = 18; int64 next_pulse_in_sec = 19; string last_error = 20;
+  repeated DesktopInfo desktops = 21; repeated TaskProgress tasks = 22;
+}
+message AccountList { repeated AccountCard items = 1; }
+message AddAccountReq {
+  string name = 1; string user = 2; string password = 3;
+  string captcha_code = 4; string captcha_key = 5;
+  string platform = 15;   // 空=天翼云；ydpc-soho / ydpc-ecloud = 移动云
+}
+message NeedCaptcha { bool need = 1; string image = 2; string key = 3; }
+message UserParam { string user = 1; }
+message CaptchaImage { string image = 1; string key = 2; }
+message QrGenerateReq { string name = 1; }
+message QrGenerateReply { string qr_id = 1; string qr_url = 2; }
+message QrStatusReq { string qr_id = 1; }
+message QrStatusReply { string status = 1; string acc_id = 2; }
+message UpdateAccountReq {
+  string id = 1; string name = 2; bool keepalive_enabled = 3; int32 pulse_interval = 4;
+  bool auto_sign = 5; bool auto_ai = 6; bool auto_hang = 7; bool auto_redeem = 8;
+  string redeem_strategy = 9; int32 redeem_day = 10; int32 redeem_step_days = 11;
+  string redeem_prod_id = 12; string redeem_prod_name = 13; int32 redeem_cost = 14;
+}
+message DesktopList { repeated DesktopInfo items = 1; }
+message PowerReq { string id = 1; string desktop_id = 2; string action = 3; }
+message PrefsReq {
+  string id = 1; string desktop_id = 2;
+  bool keepalive_enabled = 3; bool task_enabled = 4; int32 keepalive_interval = 5;
+}
+message PrefsBatchReq {
+  string id = 1;                        // 账号
+  repeated string desktop_ids = 2;      // 目标桌面；为空 = 该账号全部桌面
+  bool keepalive_enabled = 3;           // 以下为要写入的值
+  bool task_enabled = 4;
+  int32 keepalive_interval = 5;         // 秒；0 = 清除单机覆盖（继承账号默认）
+  bool set_keepalive = 6;               // 是否写入 keepalive_enabled
+  bool set_task = 7;                    // 是否写入 task_enabled
+  bool set_interval = 8;                // 是否写入 keepalive_interval
+}
+message RunTaskReq { string id = 1; string task = 2; string desktop_id = 3; }
+message PointsReply { int32 points = 1; repeated TaskProgress tasks = 2; }
+message RewardItem { string prod_id = 1; string prod_name = 2; int32 cost_points = 3; string prod_type = 4; string description = 5; }
+message RewardList { repeated RewardItem items = 1; }
+message RedeemReq {
+  string acc_id = 1; string prod_id = 2; string prod_name = 3;
+  int32 cost_points = 4; int32 times = 5; string desktop_id = 6; int32 point_type = 7;
+}
+message BoolReply { bool ok = 1; string detail = 2; }
+
+// ===== 移动云 ydpc 附加消息（ydpc-dev 新增；仅新增消息，不改旧字段） =====
+message YdpcSmsReq {
+  string acc_id = 1;        // 账号 id；add 流程的 need_* 阶段为 pending 临时 id（"pending:..."）
+  string branch = 2;        // need_device_trust / need_two_factor / need_enhanced_sms
+  string mobile = 3;        // 缺省用账号已存手机号
+  string code = 4;          // 短信验证码（仅 verify 用）
+  bool is_temporary = 5;    // 设备信任：临时设备（verify 用）
+}
+message YdpcLoginBranch {
+  string status = 1;        // success / locked / need_device_trust / need_two_factor / need_enhanced_sms / need_4a / failed
+  string acc_id = 2;        // 成功=新账号 id；need_*=后续 sms 端点要带的 pending/账号 id
+  string mobile = 3;
+  string login_code = 4;    // 密码登录 body.code（信任/二次验证接口需原样回传，可为空）
+  string error = 5;
+  string error_code = 6;
+  bool need_sms = 7;        // true = 请调 /api/ydpc/account/sms/send 发码后让用户输码
+}
+
+// ===== 设置 =====
+message NotifyChannelMsg { string type = 1; string url = 2; string secret = 3; string acc_scope = 4; }
+message SettingsMsg {
+  int32 pulse_interval_seconds = 1; int32 keep_alive_seconds = 2;
+  repeated string execute_time = 3;
+  string sign_cron = 4; string ai_cron = 5; string hang_cron = 6; string redeem_cron = 7;
+  string redeem_mode = 8; int32 redeem_mode_day = 9; int32 redeem_mode_step_days = 10;
+  bool notify_on_error_only = 11;
+  repeated NotifyChannelMsg notify_channels = 12;
+  string title = 13; string subtitle = 14;
+  string hook_url = 15;   // 保活完成回调 Hook（空=禁用）
+}
+
+// ===== 日志 / 系统 =====
+message LogItem { string ts = 1; string level = 2; string scope = 3; string account = 4; string msg = 5; }
+message LogList { repeated LogItem items = 1; }
+message LogQuery { int32 limit = 1; string level = 2; string scope = 3; string account = 4; }
+message SystemInfo {
+  string version = 1; string started_at = 2; int64 uptime_sec = 3;
+  string runtime = 4; int32 account_count = 5;
+}
+
+// ===== 端点表（响应均为 Envelope，data 类型如下） =====
+// POST /api/auth/login            LoginReq        -> UserReply
+// POST /api/auth/logout           Empty           -> Empty
+// GET  /api/auth/me               -               -> UserReply
+// POST /api/auth/changepwd        ChangePwdReq    -> BoolReply
+// GET  /api/users                 -               -> UserList
+// POST /api/users                 CreateUserReq   -> UserReply
+// POST /api/users/{id}/resetpwd   ResetPwdReq     -> BoolReply
+// POST /api/users/{id}/delete     IdReq           -> BoolReply
+// GET  /api/accounts              -               -> AccountList
+// POST /api/account/add           AddAccountReq   -> NeedCaptcha(或 acc 回执 BoolReply.detail=id)
+// GET  /api/account/captcha?user= -               -> CaptchaImage
+// POST /api/account/qrcode/generate QrGenerateReq -> QrGenerateReply
+// GET  /api/account/qrcode/status?qrId= -         -> QrStatusReply
+// POST /api/account/{id}/update   UpdateAccountReq-> BoolReply
+// POST /api/account/{id}/delete   IdReq           -> BoolReply
+// POST /api/account/{id}/relogin  IdReq           -> BoolReply
+// GET  /api/account/{id}/desktops -               -> DesktopList
+// POST /api/account/{id}/sync     IdReq           -> BoolReply
+// POST /api/account/{id}/power    PowerReq        -> BoolReply
+// POST /api/account/{id}/prefs    PrefsReq        -> BoolReply
+// POST /api/account/{id}/prefs/batch PrefsBatchReq -> BoolReply(detail=更新台数)
+// POST /api/account/{id}/task/run RunTaskReq      -> BoolReply
+// GET  /api/account/{id}/points   -               -> PointsReply
+// GET  /api/rewards?accId=        -               -> RewardList
+// POST /api/redeem                RedeemReq       -> BoolReply
+// GET  /api/settings              -               -> SettingsMsg
+// POST /api/settings              SettingsMsg     -> BoolReply
+// POST /api/logs/recent           LogQuery        -> LogList
+// GET  /api/logs/stream           SSE(JSON lines，见契约)
+// GET  /api/system/info           -               -> SystemInfo
+// （ydpc 同构：/api/ydpc/account/add|update|delete|relogin|sync|power|prefs|task/run，GET /api/ydpc/accounts）
+// ---- 移动云 ydpc 端点表（ydpc-dev）----
+// GET  /api/ydpc/accounts               -               -> AccountList（desktops + next_pulse 已填）
+// POST /api/ydpc/account/add            AddAccountReq   -> (0,BoolReply.detail=accId)
+//                                                          | (1,YdpcLoginBranch) 失败
+//                                                          | (2,YdpcLoginBranch) ecloud need_*（need_sms=true）
+//                                                          | (2,NeedCaptcha)     soho 需图形验证码
+// POST /api/ydpc/account/sms/send       YdpcSmsReq      -> YdpcLoginBranch（按分支三路发码）
+// POST /api/ydpc/account/sms/verify     YdpcSmsReq      -> (0,YdpcLoginBranch.status=success) | (1,...)
+// POST /api/ydpc/account/{id}/relogin   IdReq           -> BoolReply
+// POST /api/ydpc/account/{id}/sync      IdReq           -> BoolReply
+// GET  /api/ydpc/account/{id}/desktops  -               -> DesktopList
+// POST /api/ydpc/account/{id}/power     PowerReq        -> BoolReply（soho: shutdown|reboot；ecloud: poweron|shutdown|reboot）
+// POST /api/ydpc/account/{id}/prefs     PrefsReq        -> BoolReply
+// POST /api/ydpc/account/{id}/prefs/batch PrefsBatchReq -> BoolReply(detail=更新台数)
+// POST /api/ydpc/account/{id}/update    UpdateAccountReq-> BoolReply
+// POST /api/ydpc/account/{id}/delete    IdReq           -> BoolReply

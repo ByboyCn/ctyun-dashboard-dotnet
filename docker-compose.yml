@@ -1,0 +1,14 @@
+services:
+  ctyun-dashboard:
+    build: .
+    # 镜像发布后可用：ghcr.io/<you>/ctyun-dashboard-dotnet:latest
+    container_name: ctyun-dashboard
+    restart: unless-stopped
+    ports:
+      - "8571:8571"
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=8571
+      - CTYUN_DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data

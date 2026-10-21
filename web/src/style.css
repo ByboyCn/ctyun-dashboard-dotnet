@@ -774,3 +774,15 @@ body {
 .section-gap {
   margin-top: 16px;
 }
+
+/* 下拉菜单警示项（验证码重新验证等）—— dropdown 挂 teleport，需全局作用 */
+.menu-item-warn {
+  color: var(--c-wait-scan);
+  font-weight: 600;
+}
+
+.menu-item-warn:hover,
+.menu-item-warn:focus {
+  color: var(--c-wait-scan);
+  background: var(--c-wait-scan-bg);
+}

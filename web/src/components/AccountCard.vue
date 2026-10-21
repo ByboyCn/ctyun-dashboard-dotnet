@@ -6,6 +6,7 @@ import TaskBar from './TaskBar.vue'
 import AccountSettingsDialog from './AccountSettingsDialog.vue'
 import PointsDialog from './PointsDialog.vue'
 import DesktopsDrawer from './DesktopsDrawer.vue'
+import CaptchaReloginDialog from './CaptchaReloginDialog.vue'
 import { api, FEATURES, TASK_KEYS, TASK_LABELS } from '../api/endpoints'
 import { errMsg, fmtCountdown, statusOf, taskOf } from '../utils/format'
 
@@ -18,6 +19,8 @@ const emit = defineEmits(['refresh', 'enter-wall'])
 const feat = computed(() => FEATURES[props.platform] || {})
 const status = computed(() => statusOf(props.card))
 const statusTip = computed(() => props.card.statusText || props.card.lastError || '')
+// 30060/30090 风控信号：服务端要求图形验证码重新登录
+const needCaptchaRelogin = computed(() => /需要图形验证码/.test(String(props.card?.statusText || '')))
 const desktops = computed(() => props.card.desktops || [])
 const tasks = computed(() => ({
   sign: taskOf(props.card, 'sign'),
@@ -110,8 +113,11 @@ async function doRemove() {
 function onMore(cmd) {
   if (cmd === 'settings') settingsVisible.value = true
   else if (cmd === 'points' && feat.value.points) pointsVisible.value = true
-  else if (cmd === 'relogin') doRelogin()
-  else if (cmd === 'remove') doRemove()
+  else if (cmd === 'relogin') {
+    // 30060/30090 风控：服务端要求图形验证码 → 走「验证码重新验证」弹窗而非直接 relogin
+    if (needCaptchaRelogin.value) captchaReloginVisible.value = true
+    else doRelogin()
+  } else if (cmd === 'remove') doRemove()
 }
 
 // ===== 卡片单击 / 双击（单击=桌面抽屉，双击=设备墙；与拖拽、内部控件互斥） =====
@@ -139,6 +145,7 @@ onBeforeUnmount(() => clearTimeout(clickTimer))
 const settingsVisible = ref(false)
 const pointsVisible = ref(false)
 const drawerVisible = ref(false)
+const captchaReloginVisible = ref(false)
 </script>
 
 <template>
@@ -162,7 +169,9 @@ const drawerVisible = ref(false)
             <el-dropdown-menu>
               <el-dropdown-item command="settings">账号设置</el-dropdown-item>
               <el-dropdown-item v-if="feat.points" command="points">积分与兑换</el-dropdown-item>
-              <el-dropdown-item command="relogin">重新登录</el-dropdown-item>
+              <el-dropdown-item command="relogin" :class="{ 'menu-item-warn': needCaptchaRelogin }">
+                {{ needCaptchaRelogin ? '⚠ 验证码重新验证' : '重新登录' }}
+              </el-dropdown-item>
               <el-dropdown-item command="remove" divided>删除账号</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -218,5 +227,6 @@ const drawerVisible = ref(false)
       :platform="platform"
       @refreshed="emit('refresh')"
     />
+    <CaptchaReloginDialog v-model="captchaReloginVisible" :card="card" @refreshed="emit('refresh')" />
   </div>
 </template>

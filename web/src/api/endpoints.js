@@ -82,6 +82,11 @@ export const ctyunApi = {
   qrStatus: (qrId) =>
     rpc('/api/account/qrcode/status', null, null, 'QrStatusReply', { method: 'GET', query: { qrId } }),
   desktops: (id) => rpc(`/api/account/${id}/desktops`, null, null, 'DesktopList', { method: 'GET' }),
+  // 30060/30090 风控：验证码重新验证（statusText 含「需要图形验证码」时触发）
+  reloginCaptcha: (id) =>
+    rpc(`/api/account/${id}/relogin/captcha`, null, null, 'CaptchaImage', { method: 'GET' }),
+  reloginCaptchaVerify: (id, captchaCode) =>
+    rpc(`/api/account/${id}/relogin/captcha/verify`, 'CaptchaVerifyReq', { id, captchaCode }, 'BoolReply'),
   points: (id) => rpc(`/api/account/${id}/points`, null, null, 'PointsReply', { method: 'GET' }),
   rewards: (accId) => rpc('/api/rewards', null, null, 'RewardList', { method: 'GET', query: { accId } }),
   redeem: (p) => rpc('/api/redeem', 'RedeemReq', p, 'BoolReply'),

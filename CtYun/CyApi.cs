@@ -448,11 +448,13 @@ public class CyApi : IDisposable
         return (bytes, key);
     }
 
-    public async Task<ApiResult> SendSmsCodeAsync(string phone, string captchaCode, string captchaKey)
+    public async Task<(ApiResult Result, string SmsKey)> SendSmsCodeAsync(string phone, string captchaCode, string captchaKey)
     {
         var url = $"api/cdserv/client/device/getSmsCode?mobilePhone={Uri.EscapeDataString(phone)}&captchaCode={Uri.EscapeDataString(captchaCode)}";
         if (captchaKey != "") url += "&captchaCodeKey=" + Uri.EscapeDataString(captchaKey);
-        return await ApiAsync("GET", url);
+        var r = await ApiAsync("GET", url);
+        var smsKey = r.RespHeaders.TryGetValue("ctg-sms-key", out var sv) ? string.Join("", sv) : "";
+        return (r, smsKey);
     }
 
     public async Task<ApiResult> BindDeviceAsync(string verificationCode, string smsCodeKey)

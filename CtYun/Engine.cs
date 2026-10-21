@@ -181,22 +181,25 @@ public sealed class AccountRuntime
     }
 
     // ---------- 短信验证设备（30060/30090 风控的正解：绑定设备后免密凭据与静默续期恢复可用）----------
-    private string _smsCodeKey = "";
+    private string _smsCaptchaKey = "";   // 图形码会话密钥（getSmsCode 必须回传）
+    private string _smsCodeKey = "";      // 短信码会话密钥（bindDevice 必须回传）
 
     /// <summary>第一步：取短信流程的图形验证码。</summary>
     public async Task<(byte[] Image, string Key)> BeginSmsVerificationAsync()
     {
         await EnsureLoginAsync();
         var (img, key) = await Api().GetSmsCaptchaAsync();
+        _smsCaptchaKey = key;
         return (img, key);
     }
 
-    /// <summary>第二步：图形码校验通过后向手机发送短信验证码。</summary>
+    /// <summary>第二步：图形码校验通过后向手机发送短信验证码（回存 ctg-sms-key 供绑定用）。</summary>
     public async Task<(bool Ok, string Message)> SendSmsCodeAsync(string captchaCode)
     {
         await EnsureLoginAsync();
-        var r = await Api().SendSmsCodeAsync(Row.User, captchaCode, "");
+        var r = await Api().SendSmsCodeAsync(Row.User, captchaCode, _smsCaptchaKey);
         if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
+        if (r.RespHeaders.TryGetValue("ctg-sms-key", out var sv)) _smsCodeKey = string.Join("", sv);
         Log("success", "短信验证码已发送至绑定手机");
         return (true, "");
     }
@@ -205,7 +208,7 @@ public sealed class AccountRuntime
     public async Task<(bool Ok, string Message)> VerifySmsBindAsync(string verificationCode)
     {
         await EnsureLoginAsync();
-        var r = await Api().BindDeviceAsync(verificationCode, "");
+        var r = await Api().BindDeviceAsync(verificationCode, _smsCodeKey);
         if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
         Row.LastError = null;
         _db.UpdateAccount(Row);

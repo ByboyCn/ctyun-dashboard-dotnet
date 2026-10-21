@@ -14,6 +14,8 @@ RUN dotnet publish CtyunDashboard.csproj -c Release -r linux-x64 \
 # ---------- 前端（可选：构建 Vue 控制台并入单体镜像） ----------
 FROM node:22-alpine AS web
 WORKDIR /web
+# api.proto 是前端 ?raw 内联的契约源，必须一并进入构建上下文
+COPY proto /proto
 COPY web/package.json web/pnpm-lock.yaml* ./
 RUN (corepack enable && pnpm install --frozen-lockfile) || npm install
 COPY web/ .

@@ -559,6 +559,7 @@ public sealed class Engine
     private readonly ConcurrentDictionary<string, AccountRuntime> _runtimes = new();
     private readonly ConcurrentDictionary<string, YdpcAccountRuntime> _ydpc = new();
     private readonly ConcurrentDictionary<string, byte> _busy = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _pulseGates = new();   // 每账号脉冲并发闸（防 172 台齐发）
     private Timer? _timer;
     public DateTime StartedAt { get; } = DateTime.Now;
 

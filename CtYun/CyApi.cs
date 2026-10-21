@@ -344,13 +344,17 @@ public class CyApi : IDisposable
     }
 
     // ---------- 图形验证码 ----------
+    private static readonly HttpClient CaptchaHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
+
     public async Task<(byte[] Image, string Key)> GetCaptchaAsync()
     {
-        // userInfo=<账号> 为必带参数（deskapp/api.js 同款）——缺失时服务端返回 30010 JSON 错误而非图片
+        // ⚠️ 官方验证码接口必须【全新裸请求】：不带 CTG-* 头、不带 negotiate 协商 Cookie。
+        // 真机实证（OVH）：裸 GET = 200 image/jpeg；带协商会话 Cookie = 30010 JSON 错误（假"验证码"）。
+        // deskapp/Node 版成功同理（fetch 天然无 Cookie）。
         using var req = new HttpRequestMessage(HttpMethod.Get,
             $"{ApiBase}/api/auth/client/captcha?height=80&width=200&userInfo={Uri.EscapeDataString(_account)}&mode=auto&_t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
-        CopyPlainHeaders(req);
-        using var resp = await _http.SendAsync(req);
+        req.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36");
+        using var resp = await CaptchaHttp.SendAsync(req);
         var bytes = await resp.Content.ReadAsByteArrayAsync();
         var key = resp.Headers.TryGetValues("ctg-captcha-key", out var v) ? string.Join("", v) : "";
         _captchaKey = key;

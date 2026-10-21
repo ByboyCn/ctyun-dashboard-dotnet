@@ -59,13 +59,6 @@ public sealed class Db
                 RawJson TEXT,
                 PRIMARY KEY (AccountId, DesktopId));
             """);
-        // 旧库迁移：补 RawJson 列
-        try { Exec("ALTER TABLE desktop ADD COLUMN RawJson TEXT"); } catch { /* 列已存在 */ }
-        // 保活周期默认迁移：600 秒以下的旧值（含旧默认 30 秒、用户误填的 5 秒）统一 → 6 小时；低于 10 秒的单机间隔回归继承账号值
-        Exec("UPDATE account SET PulseIntervalSeconds=21600 WHERE PulseIntervalSeconds < 600");
-        Exec("UPDATE desktop SET KeepaliveInterval=NULL WHERE KeepaliveInterval IS NOT NULL AND KeepaliveInterval<10");
-        var settings = GetSettings();
-        if (settings.PulseIntervalSeconds == 30) { settings.PulseIntervalSeconds = 21600; SaveSettings(settings); }
         Exec("CREATE TABLE IF NOT EXISTS session (Token TEXT PRIMARY KEY, UserId TEXT, ExpiresAt TEXT);");
         Exec("CREATE TABLE IF NOT EXISTS kv (Key TEXT PRIMARY KEY, Value TEXT);");
         Exec("CREATE TABLE IF NOT EXISTS log (Id INTEGER PRIMARY KEY AUTOINCREMENT, Ts TEXT, Level TEXT, Scope TEXT, Account TEXT, Msg TEXT);");
@@ -80,6 +73,14 @@ public sealed class Db
             });
         }
         if (GetKv("settings") == null) SaveSettings(new AppSettings());
+
+        // 迁移（必须在全部建表与种子之后）
+        try { Exec("ALTER TABLE desktop ADD COLUMN RawJson TEXT"); } catch { /* 列已存在 */ }
+        // 保活周期默认迁移：600 秒以下的旧值（含旧默认 30 秒、用户误填的 5 秒）统一 → 6 小时；低于 10 秒的单机间隔回归继承账号值
+        Exec("UPDATE account SET PulseIntervalSeconds=21600 WHERE PulseIntervalSeconds < 600");
+        Exec("UPDATE desktop SET KeepaliveInterval=NULL WHERE KeepaliveInterval IS NOT NULL AND KeepaliveInterval<10");
+        var settings = GetSettings();
+        if (settings.PulseIntervalSeconds == 30) { settings.PulseIntervalSeconds = 21600; SaveSettings(settings); }
     }
 
     // ---------- 通用 ----------

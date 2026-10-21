@@ -7,6 +7,7 @@ import AccountSettingsDialog from './AccountSettingsDialog.vue'
 import PointsDialog from './PointsDialog.vue'
 import DesktopsDrawer from './DesktopsDrawer.vue'
 import CaptchaReloginDialog from './CaptchaReloginDialog.vue'
+import SmsDeviceDialog from './SmsDeviceDialog.vue'
 import { api, FEATURES, TASK_KEYS, TASK_LABELS } from '../api/endpoints'
 import { errMsg, fmtCountdown, statusOf, taskOf } from '../utils/format'
 
@@ -117,7 +118,8 @@ function onMore(cmd) {
     // 30060/30090 风控：服务端要求图形验证码 → 走「验证码重新验证」弹窗而非直接 relogin
     if (needCaptchaRelogin.value) captchaReloginVisible.value = true
     else doRelogin()
-  } else if (cmd === 'remove') doRemove()
+  } else if (cmd === 'sms-device') smsDeviceVisible.value = true
+  else if (cmd === 'remove') doRemove()
 }
 
 // ===== 卡片单击 / 双击（单击=桌面抽屉，双击=设备墙；与拖拽、内部控件互斥） =====
@@ -146,6 +148,7 @@ const settingsVisible = ref(false)
 const pointsVisible = ref(false)
 const drawerVisible = ref(false)
 const captchaReloginVisible = ref(false)
+const smsDeviceVisible = ref(false)
 </script>
 
 <template>
@@ -171,6 +174,9 @@ const captchaReloginVisible = ref(false)
               <el-dropdown-item v-if="feat.points" command="points">积分与兑换</el-dropdown-item>
               <el-dropdown-item command="relogin" :class="{ 'menu-item-warn': needCaptchaRelogin }">
                 {{ needCaptchaRelogin ? '⚠ 验证码重新验证' : '重新登录' }}
+              </el-dropdown-item>
+              <el-dropdown-item v-if="needCaptchaRelogin" command="sms-device" class="menu-item-warn">
+                📱 短信验证设备
               </el-dropdown-item>
               <el-dropdown-item command="remove" divided>删除账号</el-dropdown-item>
             </el-dropdown-menu>
@@ -228,5 +234,6 @@ const captchaReloginVisible = ref(false)
       @refreshed="emit('refresh')"
     />
     <CaptchaReloginDialog v-model="captchaReloginVisible" :card="card" @refreshed="emit('refresh')" />
+    <SmsDeviceDialog v-model="smsDeviceVisible" :card="card" @refreshed="emit('refresh')" />
   </div>
 </template>

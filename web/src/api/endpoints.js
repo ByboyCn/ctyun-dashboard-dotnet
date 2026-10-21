@@ -87,6 +87,12 @@ export const ctyunApi = {
     rpc(`/api/account/${id}/relogin/captcha`, null, null, 'CaptchaImage', { method: 'GET' }),
   reloginCaptchaVerify: (id, captchaCode) =>
     rpc(`/api/account/${id}/relogin/captcha/verify`, 'CaptchaVerifyReq', { id, captchaCode }, 'BoolReply'),
+  // 30060/30090 风控：短信验证设备绑定（与验证码重新验证同源触发信号）
+  smsCaptcha: (id) => rpc(`/api/account/${id}/sms/captcha`, null, null, 'CaptchaImage', { method: 'GET' }),
+  smsSend: (id, captchaCode) =>
+    rpc(`/api/account/${id}/sms/send`, 'SmsSendReq', { id, captchaCode }, 'BoolReply'),
+  smsVerify: (id, verificationCode) =>
+    rpc(`/api/account/${id}/sms/verify`, 'SmsVerifyReq', { id, verificationCode }, 'BoolReply'),
   points: (id) => rpc(`/api/account/${id}/points`, null, null, 'PointsReply', { method: 'GET' }),
   rewards: (accId) => rpc('/api/rewards', null, null, 'RewardList', { method: 'GET', query: { accId } }),
   redeem: (p) => rpc('/api/redeem', 'RedeemReq', p, 'BoolReply'),

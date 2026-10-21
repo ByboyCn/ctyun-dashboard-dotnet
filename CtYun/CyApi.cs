@@ -346,14 +346,18 @@ public class CyApi : IDisposable
     // ---------- 图形验证码 ----------
     public async Task<(byte[] Image, string Key)> GetCaptchaAsync()
     {
+        // userInfo=<账号> 为必带参数（deskapp/api.js 同款）——缺失时服务端返回 30010 JSON 错误而非图片
         using var req = new HttpRequestMessage(HttpMethod.Get,
-            $"{ApiBase}/api/auth/client/captcha?height=80&width=200&mode=auto&_t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
+            $"{ApiBase}/api/auth/client/captcha?height=80&width=200&userInfo={Uri.EscapeDataString(_account)}&mode=auto&_t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
         CopyPlainHeaders(req);
         using var resp = await _http.SendAsync(req);
         var bytes = await resp.Content.ReadAsByteArrayAsync();
         var key = resp.Headers.TryGetValues("ctg-captcha-key", out var v) ? string.Join("", v) : "";
         _captchaKey = key;
-        return (bytes, key);
+        // 健壮性：图片响应必以 JPEG/PNG 魔数开头，否则把服务端错误文本抛给上层
+        if (bytes.Length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xD8) || (bytes[0] == 0x89 && bytes[1] == 0x50)))
+            return (bytes, key);
+        throw new Exception("验证码接口返回非图片: " + Encoding.UTF8.GetString(bytes, 0, Math.Min(120, bytes.Length)));
     }
 
     // ---------- 官方扫码登录 ----------

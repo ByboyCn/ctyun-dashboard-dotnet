@@ -147,8 +147,9 @@ public class CyApi : IDisposable
         // 由界面引导用户完成一次「验证码重新验证」（对齐原版的重新验证登录入口）。
         if (result.Code == 30060 || result.Code == 30090 || result.Msg.Contains("登录失败，请重试"))
         {
+            var first = !NeedsCaptcha;   // 只在状态翻转时提醒一次，避免每请求刷屏
             NeedsCaptcha = true;
-            _log("warning", _account, "服务端要求图形验证码登录（30060/30090）——请在控制台对该账号完成「验证码重新验证」");
+            if (first) _log("warning", _account, "服务端要求图形验证码登录（30060/30090）——请在控制台对该账号完成「验证码重新验证」");
         }
 
         // 会话过期（40010/登录信息已过期）：优先免密续期（不输密码），失败再密码重登，然后重试一次

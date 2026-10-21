@@ -446,6 +446,26 @@ public static class Routes
 
         // 添加账号：platform=ydpc-soho → SohoClient 登录（图形验证码回显 code=2）；
         //           platform=ydpc-ecloud → Ecloud 密码登录（NEED_* 分支 code=2 + need_sms）
+        MapGet(app, "/api/account/{id}/relogin/captcha", async ctx =>
+        {
+            var rt = EngineOf(ctx);
+            if (rt == null) return (1, null);
+            var (img, key) = await rt.BeginCaptchaReloginAsync();
+            return (0, (IMessage?)new Api.CaptchaImage { Image = "data:image/jpeg;base64," + Convert.ToBase64String(img), Key = key });
+        });
+        MapPost<Api.CaptchaVerifyReq>(app, "/api/account/{id}/relogin/captcha/verify", async (ctx, req) =>
+        {
+            var rt = EngineOf(ctx, req.Id);
+            if (rt == null) return (1, null);
+            var ok = await rt.ReloginWithCaptchaAsync(req.CaptchaCode);
+            Svc.Engine.ReloadAll();
+            return (ok ? 0 : 1, (IMessage?)new Api.BoolReply
+            {
+                Ok = ok,
+                Detail = ok ? "验证码重新验证成功，登录态已刷新" : "验证码错误或已过期，请重试",
+            });
+        });
+
         MapPost<Api.AddAccountReq>(app, "/api/ydpc/account/add", async (ctx, req) =>
         {
             var me = CurrentUser(ctx)!;

@@ -46,6 +46,7 @@ message AddAccountReq {
 message NeedCaptcha { bool need = 1; string image = 2; string key = 3; }
 message UserParam { string user = 1; }
 message CaptchaImage { string image = 1; string key = 2; }
+message CaptchaVerifyReq { string id = 1; string captcha_code = 2; }
 message QrGenerateReq { string name = 1; }
 message QrGenerateReply { string qr_id = 1; string qr_url = 2; }
 message QrStatusReq { string qr_id = 1; }
@@ -160,6 +161,9 @@ message SystemInfo {
 //                                                          | (1,YdpcLoginBranch) 失败
 //                                                          | (2,YdpcLoginBranch) ecloud need_*（need_sms=true）
 //                                                          | (2,NeedCaptcha)     soho 需图形验证码
+// GET  /api/account/{id}/captcha?user= -               -> CaptchaImage      （add 流程用）
+// GET  /api/account/{id}/relogin/captcha -             -> CaptchaImage      （30060/30090 需验证码的重新验证）
+// POST /api/account/{id}/relogin/captcha/verify CaptchaVerifyReq -> BoolReply
 // POST /api/ydpc/account/sms/send       YdpcSmsReq      -> YdpcLoginBranch（按分支三路发码）
 // POST /api/ydpc/account/sms/verify     YdpcSmsReq      -> (0,YdpcLoginBranch.status=success) | (1,...)
 // POST /api/ydpc/account/{id}/relogin   IdReq           -> BoolReply

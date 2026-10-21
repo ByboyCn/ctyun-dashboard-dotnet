@@ -45,6 +45,12 @@ public class CyApi : IDisposable
     public JsonElement Profile { get; private set; }
     public bool LoggedIn { get; private set; }
 
+    /// <summary>服务端要求图形验证码登录（30060/30090 风控标记）；成功登录后清除。</summary>
+    public bool NeedsCaptcha { get; private set; }
+
+    /// <summary>供运行时在自动重登失败时标记需要验证码。</summary>
+    public void MarkNeedsCaptcha() => NeedsCaptcha = true;
+
     /// <summary>登出当前内存会话（不清理 Cookie 池以外状态）。</summary>
     public void InvalidateSession() => LoggedIn = false;
 
@@ -136,33 +142,13 @@ public class CyApi : IDisposable
         // 对齐原版：明文体 + 签名头，无需密钥协商前置
         var result = await SendOnce(method, url, jsonBody, form, extraHeaders);
 
-        // 兜底自愈（30090 数据解密失败 / 30060 登录失败请重试 —— 密钥过期或会话失效）：
-        // 重协商 → 重试；仍失败 → 完整重登录 → 再试。
-        if ((result.Code == 30090 || result.Code == 30060 || result.Msg.Contains("数据解密失败") || result.Msg.Contains("登录失败，请重试"))
-            && !url.Contains("negotiationEncKey"))
+        // 30060/30090 = 服务端要求图形验证码登录（风控标记）。
+        // 这类错误不能自动化绕过——自动重试只会循环触发风控。置 NeedsCaptcha 标记，
+        // 由界面引导用户完成一次「验证码重新验证」（对齐原版的重新验证登录入口）。
+        if (result.Code == 30060 || result.Code == 30090 || result.Msg.Contains("登录失败，请重试"))
         {
-            _log("warning", _account, "服务端报数据解密失败(30090/30060)：自动重新协商密钥后重试...");
-            try { await NegotiateAsync(); }
-            catch (Exception ex)
-            {
-                _log("error", _account, "重新协商密钥失败: " + ex.Message);
-                return result;
-            }
-            result = await SendOnce(method, url, jsonBody, form, extraHeaders);
-
-            if ((result.Code == 30090 || result.Code == 30060 || result.Msg.Contains("数据解密失败")) && ReLoginHandler != null && !_reloginBusy && !url.Contains("login"))
-            {
-                _log("warning", _account, "重协商仍解密失败，升级为完整重登录...");
-                _reloginBusy = true;
-                try
-                {
-                    if (await ReLoginHandler())
-                        result = await SendOnce(method, url, jsonBody, form, extraHeaders);
-                }
-                finally { _reloginBusy = false; }
-            }
-
-            if (result.Code == 0) _log("success", _account, "30090 自愈成功，请求已重试通过");
+            NeedsCaptcha = true;
+            _log("warning", _account, "服务端要求图形验证码登录（30060/30090）——请在控制台对该账号完成「验证码重新验证」");
         }
 
         // 会话过期（40010/登录信息已过期）：优先免密续期（不输密码），失败再密码重登，然后重试一次
@@ -297,6 +283,7 @@ public class CyApi : IDisposable
     private void MarkLogin(JsonElement data)
     {
         Profile = data.Clone();
+        NeedsCaptcha = false;   // 登录成功即解除风控标记
         UserId = GetLong(data, "userId");
         TenantId = GetLong(data, "tenantId");
         SecretKey = GetStr(data, "secretKey");

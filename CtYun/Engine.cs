@@ -81,10 +81,19 @@ public sealed class AccountRuntime
     }
 
     // ---------- 登录态 ----------
+    private DateTime _reloginCooldownUntil;   // 自动重登失败后的冷却（防 30060/30090 风控循环）
+    private CyApi? _captchaApi;               // 验证码重验证专用会话（图验 key 与 Cookie 绑定同一实例）
+
     public async Task<bool> EnsureLoginAsync()
     {
         var api = Api();
         if (api.LoggedIn) return true;
+        if (DateTime.Now < _reloginCooldownUntil)
+        {
+            Row.LastError = "需要图形验证码：请在卡片上完成「验证码重新验证」";
+            _db.UpdateAccount(Row);
+            return false;
+        }
         if (Row.EncSession != "" && api.ImportSession(_db.Unprotect(Row.EncSession)))
         {
             Log("info", "已从本地登录态恢复会话");
@@ -106,15 +115,48 @@ public sealed class AccountRuntime
         var r = await api.LoginAsync(Row.User, pwd, null);
         if (r.Code != 0 || !api.LoggedIn)
         {
-            Row.LastError = "登录失败: " + r.Code + " " + r.Msg;
+            // 30060/30090 = 服务端要求图形验证码（风控标记）：暂停自动重登 10 分钟，
+            // 提示用户走「验证码重新验证」，绝不循环重试加剧风控
+            var captchaRequired = r.Code is 30060 or 30090 || api.NeedsCaptcha || r.Msg.Contains("验证码");
+            Row.LastError = captchaRequired
+                ? "需要图形验证码：请在卡片上完成「验证码重新验证」"
+                : "登录失败: " + r.Code + " " + r.Msg;
+            if (captchaRequired) { api.MarkNeedsCaptcha(); _reloginCooldownUntil = DateTime.Now.AddMinutes(10); }
             _db.UpdateAccount(Row);
             return false;
         }
         Row.EncSession = _db.Protect(api.ExportSession());
         Row.LastLoginAt = Db.Now();
         Row.LastError = null;
+        _reloginCooldownUntil = DateTime.MinValue;
         _db.UpdateAccount(Row);
         Log("success", "登录成功，登录态已加密落盘");
+        return true;
+    }
+
+    /// <summary>取验证码图（「验证码重新验证」流程第一步；实例缓存保证 Cookie/key 绑定一致）。</summary>
+    public async Task<(byte[] Image, string Key)> BeginCaptchaReloginAsync()
+    {
+        _captchaApi ??= new CyApi(Row.User, (lv, acc, msg) => _log.Write(lv, "CtYun", Name, msg));
+        if (_captchaApi.Eid == "") await _captchaApi.NegotiateAsync();
+        var (img, key) = await _captchaApi.GetCaptchaAsync();
+        return (img, key);
+    }
+
+    /// <summary>带图形验证码重新登录（解除 30060/30090 风控标记），成功即刷新落盘登录态。</summary>
+    public async Task<bool> ReloginWithCaptchaAsync(string captchaCode)
+    {
+        var api = _captchaApi;
+        if (api == null || Row.EncPassword == "") return false;
+        var pwd = _db.Unprotect(Row.EncPassword);
+        var r = await api.LoginAsync(Row.User, pwd, captchaCode);
+        if (r.Code != 0 || !api.LoggedIn) return false;
+        Row.EncSession = _db.Protect(api.ExportSession());
+        Row.LastLoginAt = Db.Now();
+        Row.LastError = null;
+        _reloginCooldownUntil = DateTime.MinValue;
+        _db.UpdateAccount(Row);
+        Log("success", "验证码重新验证成功，登录态已刷新");
         return true;
     }
 

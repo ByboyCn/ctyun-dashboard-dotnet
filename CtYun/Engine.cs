@@ -200,9 +200,13 @@ public sealed class AccountRuntime
         var (r, smsKey) = await Api().SendSmsCodeAsync(Row.User, captchaCode, _smsCaptchaKey);
         if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
         _smsCodeKey = smsKey;
+        // 诊断：记录官方响应原文与短信会话密钥是否就位（定位"受理但未收到短信"）
+        Log("info", $"getSmsCode 官方响应: {Truncate(r.Raw, 260)} | ctg-sms-key={(smsKey == "" ? "缺失" : "已返回")}");
         Log("success", "短信验证码已发送至绑定手机");
         return (true, "");
     }
+
+    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n];
 
     /// <summary>第三步：短信码校验并绑定设备（绑定后免密凭据与静默续期恢复可用）。</summary>
     public async Task<(bool Ok, string Message)> VerifySmsBindAsync(string verificationCode)

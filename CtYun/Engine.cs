@@ -175,6 +175,7 @@ public sealed class AccountRuntime
         Row.LastError = null;
         _reloginCooldownUntil = DateTime.MinValue;
         _db.UpdateAccount(Row);
+        Api().ImportSession(_db.Unprotect(Row.EncSession));   // 主实例同步新登录态
         Log("success", "验证码重新验证成功，登录态已刷新");
         return true;
     }

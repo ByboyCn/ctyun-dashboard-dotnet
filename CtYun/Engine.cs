@@ -197,9 +197,9 @@ public sealed class AccountRuntime
     public async Task<(bool Ok, string Message)> SendSmsCodeAsync(string captchaCode)
     {
         await EnsureLoginAsync();
-        var r = await Api().SendSmsCodeAsync(Row.User, captchaCode, _smsCaptchaKey);
+        var (r, smsKey) = await Api().SendSmsCodeAsync(Row.User, captchaCode, _smsCaptchaKey);
         if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
-        if (r.RespHeaders.TryGetValue("ctg-sms-key", out var sv)) _smsCodeKey = string.Join("", sv);
+        _smsCodeKey = smsKey;
         Log("success", "短信验证码已发送至绑定手机");
         return (true, "");
     }

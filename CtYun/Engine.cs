@@ -87,7 +87,7 @@ public sealed class AccountRuntime
     public async Task<bool> EnsureLoginAsync()
     {
         var api = Api();
-        if (api.LoggedIn) return true;
+        if (api.LoggedIn) { SyncNeedsCaptchaToRow(); return true; }
         if (DateTime.Now < _reloginCooldownUntil)
         {
             Row.LastError = "需要图形验证码：请在卡片上完成「验证码重新验证」";
@@ -97,9 +97,28 @@ public sealed class AccountRuntime
         if (Row.EncSession != "" && api.ImportSession(_db.Unprotect(Row.EncSession)))
         {
             Log("info", "已从本地登录态恢复会话");
+            SyncNeedsCaptchaToRow();
             return true;
         }
         return await ReLoginAsync();
+    }
+
+    private const string CaptchaHint = "需要图形验证码：请在卡片上完成「验证码重新验证」";
+
+    /// <summary>把接口层的「需要验证码」风控标记同步到卡片状态（出现/清除都落盘）。</summary>
+    private void SyncNeedsCaptchaToRow()
+    {
+        var api = Api();
+        if (api.NeedsCaptcha && Row.LastError != CaptchaHint)
+        {
+            Row.LastError = CaptchaHint;
+            _db.UpdateAccount(Row);
+        }
+        else if (!api.NeedsCaptcha && Row.LastError == CaptchaHint)
+        {
+            Row.LastError = null;
+            _db.UpdateAccount(Row);
+        }
     }
 
     public async Task<bool> ReLoginAsync()
@@ -293,6 +312,7 @@ public sealed class AccountRuntime
         {
             if (!await EnsureLoginAsync()) return false;
             var tl = await Api().GetTaskListAsync();
+            SyncNeedsCaptchaToRow();   // 30060/30090 → 卡片状态同步（出现或清除）
             if (tl.Code != 0 || tl.Data.ValueKind != JsonValueKind.Array)
             {
                 if (CyApi.IsAuthExpired(tl.Code, tl.Msg)) await ReLoginAsync();

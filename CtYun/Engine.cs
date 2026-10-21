@@ -180,6 +180,39 @@ public sealed class AccountRuntime
         return true;
     }
 
+    // ---------- 短信验证设备（30060/30090 风控的正解：绑定设备后免密凭据与静默续期恢复可用）----------
+    private string _smsCodeKey = "";
+
+    /// <summary>第一步：取短信流程的图形验证码。</summary>
+    public async Task<(byte[] Image, string Key)> BeginSmsVerificationAsync()
+    {
+        await EnsureLoginAsync();
+        var (img, key) = await Api().GetSmsCaptchaAsync();
+        return (img, key);
+    }
+
+    /// <summary>第二步：图形码校验通过后向手机发送短信验证码。</summary>
+    public async Task<(bool Ok, string Message)> SendSmsCodeAsync(string captchaCode)
+    {
+        await EnsureLoginAsync();
+        var r = await Api().SendSmsCodeAsync(Row.User, captchaCode, "");
+        if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
+        Log("success", "短信验证码已发送至绑定手机");
+        return (true, "");
+    }
+
+    /// <summary>第三步：短信码校验并绑定设备（绑定后免密凭据与静默续期恢复可用）。</summary>
+    public async Task<(bool Ok, string Message)> VerifySmsBindAsync(string verificationCode)
+    {
+        await EnsureLoginAsync();
+        var r = await Api().BindDeviceAsync(verificationCode, "");
+        if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
+        Row.LastError = null;
+        _db.UpdateAccount(Row);
+        Log("success", "设备绑定成功——风控解除，免密凭据与静默续期恢复可用");
+        return (true, "设备绑定成功");
+    }
+
     // ---------- 桌面 ----------
     public async Task<List<SmDesktop>> SyncDesktopsAsync()
     {

@@ -47,6 +47,8 @@ message NeedCaptcha { bool need = 1; string image = 2; string key = 3; }
 message UserParam { string user = 1; }
 message CaptchaImage { string image = 1; string key = 2; }
 message CaptchaVerifyReq { string id = 1; string captcha_code = 2; }
+message SmsSendReq { string id = 1; string captcha_code = 2; }
+message SmsVerifyReq { string id = 1; string verification_code = 2; }
 message QrGenerateReq { string name = 1; }
 message QrGenerateReply { string qr_id = 1; string qr_url = 2; }
 message QrStatusReq { string qr_id = 1; }

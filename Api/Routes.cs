@@ -466,6 +466,29 @@ public static class Routes
             });
         });
 
+        // ---- 短信验证设备（30060/30090 风控正解：图码→短信码→绑定设备）----
+        MapGet(app, "/api/account/{id}/sms/captcha", async ctx =>
+        {
+            var rt = EngineOf(ctx);
+            if (rt == null) return (1, null);
+            var (img, key) = await rt.BeginSmsVerificationAsync();
+            return (0, (IMessage?)new Api.CaptchaImage { Image = "data:image/jpeg;base64," + Convert.ToBase64String(img), Key = key });
+        });
+        MapPost<Api.CaptchaVerifyReq>(app, "/api/account/{id}/sms/send", async (ctx, req) =>
+        {
+            var rt = EngineOf(ctx, req.Id);
+            if (rt == null) return (1, null);
+            var (ok, msg) = await rt.SendSmsCodeAsync(req.CaptchaCode);
+            return (ok ? 0 : 1, (IMessage?)new Api.BoolReply { Ok = ok, Detail = msg });
+        });
+        MapPost<Api.CaptchaVerifyReq>(app, "/api/account/{id}/sms/verify", async (ctx, req) =>
+        {
+            var rt = EngineOf(ctx, req.Id);
+            if (rt == null) return (1, null);
+            var (ok, msg) = await rt.VerifySmsBindAsync(req.CaptchaCode);
+            return (ok ? 0 : 1, (IMessage?)new Api.BoolReply { Ok = ok, Detail = msg });
+        });
+
         MapPost<Api.AddAccountReq>(app, "/api/ydpc/account/add", async (ctx, req) =>
         {
             var me = CurrentUser(ctx)!;

@@ -116,6 +116,10 @@ public class CyApi : IDisposable
             h.Add("CTG-TENANTID", TenantId.ToString());
             h.Add("CTG-USERID", UserId.ToString());
             h.Add("CTG-SIGNATURESTR", CyCrypto.Md5Hex($"60{requestId}{TenantId}{timestamp}{UserId}{Version}{SecretKey}"));
+            // 对齐原版 ctyun-pro：官方会话令牌以 Cookie 随签名请求发送
+            // （selforder 任务中心/积分/商城依赖该 Cookie 识别会话，缺失时报 30060 登录失败）
+            if (!string.IsNullOrEmpty(AccessToken))
+                h.Add("Cookie", "token=" + AccessToken);
         }
 
         if (form != null && !isGet)

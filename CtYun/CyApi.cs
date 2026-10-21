@@ -136,11 +136,12 @@ public class CyApi : IDisposable
         // 对齐原版：明文体 + 签名头，无需密钥协商前置
         var result = await SendOnce(method, url, jsonBody, form, extraHeaders);
 
-        // 兜底自愈（理论上明文请求不再触发 30090；保留以防服务端策略变化）：
+        // 兜底自愈（30090 数据解密失败 / 30060 登录失败请重试 —— 密钥过期或会话失效）：
         // 重协商 → 重试；仍失败 → 完整重登录 → 再试。
-        if ((result.Code == 30090 || result.Msg.Contains("数据解密失败")) && !url.Contains("negotiationEncKey"))
+        if ((result.Code == 30090 || result.Code == 30060 || result.Msg.Contains("数据解密失败") || result.Msg.Contains("登录失败，请重试"))
+            && !url.Contains("negotiationEncKey"))
         {
-            _log("warning", _account, "服务端报数据解密失败(30090)：自动重新协商密钥后重试...");
+            _log("warning", _account, "服务端报数据解密失败(30090/30060)：自动重新协商密钥后重试...");
             try { await NegotiateAsync(); }
             catch (Exception ex)
             {
@@ -149,7 +150,7 @@ public class CyApi : IDisposable
             }
             result = await SendOnce(method, url, jsonBody, form, extraHeaders);
 
-            if ((result.Code == 30090 || result.Msg.Contains("数据解密失败")) && ReLoginHandler != null && !_reloginBusy && !url.Contains("login"))
+            if ((result.Code == 30090 || result.Code == 30060 || result.Msg.Contains("数据解密失败")) && ReLoginHandler != null && !_reloginBusy && !url.Contains("login"))
             {
                 _log("warning", _account, "重协商仍解密失败，升级为完整重登录...");
                 _reloginBusy = true;

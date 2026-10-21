@@ -646,12 +646,18 @@ public sealed class Engine
                 if ((now - last).TotalSeconds < interval) continue;
                 var key = rt.Row.Id + ":" + desk.DesktopId;
                 if (!_busy.TryAdd(key, 0)) continue;
+                var gate = _pulseGates.GetOrAdd(rt.Row.Id, _ => new SemaphoreSlim(3, 3));   // 每账号最多 3 路并发脉冲（172 台齐发会把连接打爆）
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        if (!rt.HangRunning)
-                            await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
+                        await gate.WaitAsync();
+                        try
+                        {
+                            if (!rt.HangRunning)
+                                await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
+                        }
+                        finally { gate.Release(); }
                     }
                     catch { }
                     finally { _busy.TryRemove(key, out _); }

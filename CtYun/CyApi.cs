@@ -134,7 +134,6 @@ public class CyApi : IDisposable
         return req;
     }
 
-    private bool _reloginBusy;
     private bool _renewBusy;
 
     /// <summary>会话被续期/重建后触发（用于落盘刷新，由 AccountRuntime 订阅）。</summary>
@@ -157,7 +156,7 @@ public class CyApi : IDisposable
         }
 
         // 会话过期（40010/登录信息已过期）：优先免密续期（不输密码），失败再密码重登，然后重试一次
-        if (IsAuthExpired(result.Code, result.Msg) && !_renewBusy && !_reloginBusy &&
+        if (IsAuthExpired(result.Code, result.Msg) && !_renewBusy &&
             !url.Contains("login") && !url.Contains("genLoginToken"))
         {
             _renewBusy = true;
@@ -421,7 +420,7 @@ public class CyApi : IDisposable
     {
         var url = "api/cdserv/client/device/getSmsCode?mobilePhone=" + Uri.EscapeDataString(mobilePhone) +
                   "&captchaCode=" + Uri.EscapeDataString(captchaCode);
-        var extra = _captchaKey != "" ? new Dictionary<string, string> { ["ctg-captcha-key"] = _captchaKey } : null;
+        var extra = _captchaKey != "" ? new Dictionary<string, string> { ["ctg-captcha-key"] = _captchaKey } : new Dictionary<string, string>();
         return ApiAsync("GET", url, extraHeaders: extra);
     }
 

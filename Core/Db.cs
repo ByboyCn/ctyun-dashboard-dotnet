@@ -76,6 +76,7 @@ public sealed class Db
 
         // 迁移（必须在全部建表与种子之后）
         try { Exec("ALTER TABLE desktop ADD COLUMN RawJson TEXT"); } catch { /* 列已存在 */ }
+        try { Exec("ALTER TABLE account ADD COLUMN Protocol TEXT"); } catch { /* 列已存在 */ }   // ydpc：ZTE / SCG（用户可选，空=ZTE）
         // 保活周期默认迁移：600 秒以下的旧值（含旧默认 30 秒、用户误填的 5 秒）统一 → 6 小时；低于 10 秒的单机间隔回归继承账号值
         Exec("UPDATE account SET PulseIntervalSeconds=21600 WHERE PulseIntervalSeconds < 600");
         Exec("UPDATE desktop SET KeepaliveInterval=NULL WHERE KeepaliveInterval IS NOT NULL AND KeepaliveInterval<10");
@@ -215,7 +216,7 @@ public sealed class Db
         "Id,Platform,Owner,Name,User,EncPassword,EncSession,KeepaliveEnabled,PulseIntervalSeconds," +
         "AutoSign,AutoAi,AutoHang,AutoRedeem,RedeemStrategy,RedeemDay,RedeemStepDays," +
         "RedeemProdId,RedeemProdName,RedeemCostPoints,LastSignTime,LastAiTime,LastHangTime," +
-        "HangMinutesToday,Points,LastLoginAt,AddedAt,LastError";
+        "HangMinutesToday,Points,LastLoginAt,AddedAt,LastError,Protocol";
 
     private static SmAccount ReadAccount(SqliteDataReader r)
     {
@@ -229,7 +230,7 @@ public sealed class Db
             RedeemProdId = S(r, 16), RedeemProdName = S(r, 17), RedeemCostPoints = I(r, 18),
             LastSignTime = SN(r, 19), LastAiTime = SN(r, 20), LastHangTime = SN(r, 21),
             HangMinutesToday = I(r, 22), Points = I(r, 23), LastLoginAt = SN(r, 24),
-            AddedAt = S(r, 25), LastError = SN(r, 26),
+            AddedAt = S(r, 25), LastError = SN(r, 26), Protocol = S(r, 27),
         };
         return a;
     }
@@ -242,7 +243,7 @@ public sealed class Db
         a.RedeemStrategy, a.RedeemDay, a.RedeemStepDays,
         a.RedeemProdId, a.RedeemProdName, a.RedeemCostPoints,
         a.LastSignTime, a.LastAiTime, a.LastHangTime,
-        a.HangMinutesToday, a.Points, a.LastLoginAt, a.AddedAt, a.LastError,
+        a.HangMinutesToday, a.Points, a.LastLoginAt, a.AddedAt, a.LastError, a.Protocol,
     ];
 
     public List<SmAccount> Accounts()
@@ -269,7 +270,7 @@ public sealed class Db
 
     public void InsertAccount(SmAccount a)
     {
-        var holders = string.Join(",", Enumerable.Range(0, 27).Select(i => "@p" + i));
+        var holders = string.Join(",", Enumerable.Range(0, 28).Select(i => "@p" + i));
         Exec($"INSERT INTO account ({AccountCols}) VALUES ({holders})", AccountArgs(a));
     }
 
@@ -279,7 +280,7 @@ public sealed class Db
             "KeepaliveEnabled=@p7,PulseIntervalSeconds=@p8,AutoSign=@p9,AutoAi=@p10,AutoHang=@p11,AutoRedeem=@p12," +
             "RedeemStrategy=@p13,RedeemDay=@p14,RedeemStepDays=@p15,RedeemProdId=@p16,RedeemProdName=@p17," +
             "RedeemCostPoints=@p18,LastSignTime=@p19,LastAiTime=@p20,LastHangTime=@p21,HangMinutesToday=@p22," +
-            "Points=@p23,LastLoginAt=@p24,AddedAt=@p25,LastError=@p26";
+            "Points=@p23,LastLoginAt=@p24,AddedAt=@p25,LastError=@p26,Protocol=@p27";
         Exec($"UPDATE account SET {sets} WHERE Id=@p0", AccountArgs(a));
     }
 
@@ -458,6 +459,8 @@ public class SmAccount
     public string? LastLoginAt { get; set; }
     public string AddedAt { get; set; } = "";
     public string? LastError { get; set; }
+    /// <summary>移动爱家底层协议：ZTE（默认）/ SCG（深信服）；仅 ydpc-soho 平台消费。</summary>
+    public string Protocol { get; set; } = "";
 }
 
 public class SmDesktop

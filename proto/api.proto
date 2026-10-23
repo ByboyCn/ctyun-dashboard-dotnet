@@ -36,12 +36,14 @@ message AccountCard {
   string last_sign_time = 15; string last_ai_time = 16; string last_hang_time = 17;
   string status_text = 18; int64 next_pulse_in_sec = 19; string last_error = 20;
   repeated DesktopInfo desktops = 21; repeated TaskProgress tasks = 22;
+  string protocol = 23;   // ydpc-soho 底层协议：ZTE / SCG（ydpc-dev 新增）
 }
 message AccountList { repeated AccountCard items = 1; }
 message AddAccountReq {
   string name = 1; string user = 2; string password = 3;
   string captcha_code = 4; string captcha_key = 5;
   string platform = 15;   // 空=天翼云；ydpc-soho / ydpc-ecloud = 移动云
+  string protocol = 16;   // ydpc-soho 底层协议：ZTE（默认）/ SCG（深信服）（ydpc-dev 新增）
 }
 message NeedCaptcha { bool need = 1; string image = 2; string key = 3; }
 message UserParam { string user = 1; }
@@ -58,6 +60,7 @@ message UpdateAccountReq {
   bool auto_sign = 5; bool auto_ai = 6; bool auto_hang = 7; bool auto_redeem = 8;
   string redeem_strategy = 9; int32 redeem_day = 10; int32 redeem_step_days = 11;
   string redeem_prod_id = 12; string redeem_prod_name = 13; int32 redeem_cost = 14;
+  string protocol = 15;   // ydpc-soho 底层协议：ZTE / SCG（空=不改）（ydpc-dev 新增）
 }
 message DesktopList { repeated DesktopInfo items = 1; }
 message PowerReq { string id = 1; string desktop_id = 2; string action = 3; }
@@ -101,6 +104,10 @@ message YdpcLoginBranch {
   string error = 5;
   string error_code = 6;
   bool need_sms = 7;        // true = 请调 /api/ydpc/account/sms/send 发码后让用户输码
+}
+message YdpcLogoutReq {
+  string id = 1;              // 账号 id
+  string user_service_id = 2; // 缺省 = 账号第一台（ydpc-dev 新增）
 }
 
 // ===== 设置 =====
@@ -176,3 +183,4 @@ message SystemInfo {
 // POST /api/ydpc/account/{id}/prefs/batch PrefsBatchReq -> BoolReply(detail=更新台数)
 // POST /api/ydpc/account/{id}/update    UpdateAccountReq-> BoolReply
 // POST /api/ydpc/account/{id}/delete    IdReq           -> BoolReply
+// POST /api/ydpc/account/{id}/logout    YdpcLogoutReq   -> BoolReply（桌面登出释放会话锁 /cc/cloudPc/logout/v2）

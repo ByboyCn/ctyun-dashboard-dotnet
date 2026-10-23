@@ -955,6 +955,76 @@ public sealed class SohoClient : IDisposable
         }
     }
 
+    /// <summary>桌面登出（cmcc-cloud-alive logout.py desktop_logout）：POST /cc/cloudPc/logout/v2
+    /// {"userServiceId":N} 释放会话锁。与 PowerOffAsync 同端点但语义不同：**不设 code 成功门槛**，
+    /// 响应原样返回（母本明确不做 listClouds 校验，避免 token 过期被前置硬失败）。</summary>
+    public async Task<JsonElement> LogoutDesktopAsync(string userServiceId, CancellationToken ct = default)
+    {
+        long usid = JsParseLeadingInt(userServiceId) ?? throw new ArgumentException($"userServiceId 非数字: {userServiceId}");
+        return await FetchApiAsync("/cc/cloudPc/logout/v2",
+            "{\"userServiceId\":" + usid.ToString(CultureInfo.InvariantCulture) + "}", ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>账号登出（logout.py account_logout）：POST /login/logout/v1 + 清本地 sohoToken/userId。</summary>
+    public async Task<JsonElement> AccountLogoutAsync(CancellationToken ct = default)
+    {
+        var res = await FetchApiAsync("/login/logout/v1", null, ct: ct).ConfigureAwait(false);
+        SohoToken = "";
+        UserId = "";
+        return res;
+    }
+
+    // -----------------------------------------------------------------------
+    // 桌面会话 HTTP 保活（cmcc-cloud-alive desktop_keepalive.py 对齐，简化移植）
+    // -----------------------------------------------------------------------
+
+    /// <summary>锁屏态心跳码：desktop_keepalive.LOCK_SCREEN_CODES {4039,4040,4041,4042}（仍算受理）。</summary>
+    public static readonly int[] LockScreenCodes = { 4039, 4040, 4041, 4042 };
+    /// <summary>desktop_keepalive.OTHER_LOGIN_CODE 4043：云电脑在别处登录/已被回收。</summary>
+    public const int HeartbeatOtherLoginCode = 4043;
+
+    /// <summary>心跳码是否算受理（code ∈ {2000} ∪ LOCK_SCREEN_CODES；对齐 candidateAccepted 判据）。</summary>
+    public static bool IsHeartbeatAccepted(int code) => code == 2000 || Array.IndexOf(LockScreenCodes, code) >= 0;
+
+    /// <summary>断连时间消息提取（desktop_keepalive._disconnect_time_message：data.message → message → 原文）。</summary>
+    public static string DisconnectTimeMessage(JsonElement resp)
+    {
+        if (resp.ValueKind == JsonValueKind.Object)
+        {
+            if (resp.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object &&
+                data.TryGetProperty("message", out var dm) && dm.ValueKind == JsonValueKind.String)
+                return dm.GetString() ?? "";
+            if (resp.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String)
+                return m.GetString() ?? "";
+        }
+        return resp.GetRawText();
+    }
+
+    /// <summary>信息上报（desktop_keepalive.info_report）：POST /cc/cloudPc/infoReport/v2。
+    /// 载荷为简化版设备信息（母本 device_info.collect_device_info 的合理默认子集）。</summary>
+    public async Task<JsonElement> InfoReportAsync(CancellationToken ct = default)
+    {
+        string body = JsonObj(
+            ("deviceName", "\"" + JsonString(Environment.MachineName) + "\""),
+            ("deviceType", "\"pc\""),
+            ("osVersion", "\"Windows 10 64-bit\""),
+            ("appVersion", "\"" + JsonString(Version) + "\""),
+            ("clientVersion", "\"" + JsonString(Version) + "\""));
+        return await FetchApiAsync("/cc/cloudPc/infoReport/v2", body, ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>断连时长（desktop_keepalive.disconnect_time）：POST /cc/cloudPc/getDisconnectTime/v1。</summary>
+    public async Task<JsonElement> DisconnectTimeAsync(string userServiceId, CancellationToken ct = default)
+    {
+        long usid = JsParseLeadingInt(userServiceId) ?? throw new ArgumentException($"userServiceId 非数字: {userServiceId}");
+        return await FetchApiAsync("/cc/cloudPc/getDisconnectTime/v1",
+            "{\"userServiceId\":" + usid.ToString(CultureInfo.InvariantCulture) + "}", ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>日志上报配置（desktop_keepalive.log_report_config）：POST /system/logReport/config/v2。</summary>
+    public Task<JsonElement> LogReportConfigAsync(CancellationToken ct = default) =>
+        FetchApiAsync("/system/logReport/config/v2", null, ct: ct);
+
     public void Dispose()
     {
         if (_ownsHttp) _http.Dispose();

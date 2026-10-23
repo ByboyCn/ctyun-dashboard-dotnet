@@ -562,6 +562,7 @@ public static class Routes
                     Name = req.Name != "" ? req.Name : req.User, User = req.User,
                     EncPassword = Svc.Db.Protect(password),
                     LastLoginAt = Db.Now(), AddedAt = Db.Now(), PulseIntervalSeconds = 600,
+                    Protocol = NormalizeYdpcProtocol(req.Protocol),
                 };
                 Svc.Db.InsertAccount(row);
                 Svc.Engine.ReloadAll();
@@ -735,9 +736,38 @@ public static class Routes
             if (req.Name != "") row.Name = req.Name;
             row.KeepaliveEnabled = req.KeepaliveEnabled;
             if (req.PulseInterval > 0) row.PulseIntervalSeconds = Math.Clamp(req.PulseInterval, 60, 604800);
+            if (req.Protocol != "") row.Protocol = NormalizeYdpcProtocol(req.Protocol);
             Svc.Db.UpdateAccount(row);
             Svc.Engine.EnsureYdpc(row);
             return Task.FromResult<(int, IMessage?)>(new(0, (IMessage?)new Api.BoolReply { Ok = true }));
+        });
+
+        // 桌面登出（logout.py desktop_logout）：桌面被占用时释放会话锁
+        MapPost<Api.YdpcLogoutReq>(app, "/api/ydpc/account/{id}/logout", async (ctx, req) =>
+        {
+            var rt = YdpcOf(ctx, req.Id);
+            if (rt == null) return (1, null);
+            var res = await rt.LogoutDesktopAsync(req.UserServiceId, ctx.RequestAborted);
+            string detail = "桌面会话锁已请求释放";
+            if (res.ValueKind == JsonValueKind.Object)
+            {
+                if (res.TryGetProperty("code", out var c))
+                    detail += $" (code={(c.ValueKind == JsonValueKind.Number ? c.GetRawText() : c.GetString() ?? "?")})";
+                string? msg = res.TryGetProperty("msg", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+                if (msg != null) detail += " " + msg;
+            }
+            Svc.Logs.Write("info", "Ydpc", rt.Row.Name, $"桌面登出已下发: {detail}");
+            return (0, (IMessage?)new Api.BoolReply { Ok = true, Detail = detail });
+        });
+
+        // 账号登出（logout.py account_logout）：/login/logout/v1 + 清本地会话
+        MapPost<Api.IdReq>(app, "/api/ydpc/account/{id}/account-logout", async (ctx, req) =>
+        {
+            var rt = YdpcOf(ctx, req.Id);
+            if (rt == null) return (1, null);
+            await rt.AccountLogoutAsync(ctx.RequestAborted);
+            Svc.Logs.Write("info", "Ydpc", rt.Row.Name, "账号已登出（sohoToken 已清除，下轮自动重登）");
+            return (0, (IMessage?)new Api.BoolReply { Ok = true, Detail = "账号已登出" });
         });
 
         MapPost<Api.IdReq>(app, "/api/ydpc/account/{id}/open", (ctx, req) =>
@@ -889,6 +919,10 @@ public static class Routes
         var s = (m ?? "").Trim();
         return s.Length >= 7 ? $"{s[..3]}****{s[^4..]}" : "***";
     }
+
+    /// <summary>ydpc-soho 底层协议归一：SCG / ZTE（其余值一律 ZTE，空=ZTE）。</summary>
+    private static string NormalizeYdpcProtocol(string? protocol) =>
+        protocol != null && protocol.Trim().Equals("SCG", StringComparison.OrdinalIgnoreCase) ? "SCG" : "ZTE";
 
     private static Api.SettingsMsg ToSettingsMsg(AppSettings s)
     {

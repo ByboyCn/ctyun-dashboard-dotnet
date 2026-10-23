@@ -58,6 +58,9 @@ public sealed class YdpcAccountRuntime
     public YdpcPlatform Platform =>
         Row.Platform.Contains("ecloud", StringComparison.OrdinalIgnoreCase) ? YdpcPlatform.Ecloud : YdpcPlatform.Soho;
 
+    /// <summary>移动爱家底层协议：SCG（深信服，走 SCG 数据面）/ ZTE（默认，走 SOHO 心跳+CAG）。</summary>
+    public bool IsScg => Row.Protocol.Trim().Equals("SCG", StringComparison.OrdinalIgnoreCase);
+
     public YdpcAccountRuntime(SmAccount row) { Row = row; }
 
     /// <summary>ReloadAll 时同步最新落盘行（保留内存会话态：冷却期/交互标记/驱动实例）。</summary>
@@ -106,7 +109,12 @@ public sealed class YdpcAccountRuntime
         var hadError = Row.LastError != null; // 【Bug 2 修复】先拍快照：L1 通过分支会先把内存 LastError 置 null，事后判断就再也看不到"曾带错"
         try
         {
-            if (Platform == YdpcPlatform.Soho) await SohoRoundAsync(ct).ConfigureAwait(false);
+            if (Platform == YdpcPlatform.Soho)
+            {
+                // 【协议分流】ZTE=SOHO 心跳 + CAG 握手；SCG=深信服数据面（scg_route.py 移植）
+                if (IsScg) await ScgRoundAsync(ct).ConfigureAwait(false);
+                else await SohoRoundAsync(ct).ConfigureAwait(false);
+            }
             else await EcloudRoundAsync(ct).ConfigureAwait(false);
             // 本轮未写回任何错误、且开始前带错 → 视为已恢复，**落盘**清除
             // （旧实现只清内存不落盘，卡片永远停在旧的「会话失效」上）
@@ -172,6 +180,109 @@ public sealed class YdpcAccountRuntime
         {
             Log("warning", $"保活轮软失败(不熔断): {r.FailureText}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // SCG 深信服数据面（scg_route.py 移植；run_scg_keepalive 的 forever 软恢复
+    // 压缩进单轮：最多 3 次尝试，失败指数退避后重拉 connect-info 续连——
+    // CEM 502/维护/VM 批量下线按母本口径一律软恢复，绝不熔断账号）
+    // -----------------------------------------------------------------------
+    private async Task ScgRoundAsync(CancellationToken ct)
+    {
+        var soho = Soho();
+        if (string.IsNullOrEmpty(soho.Soho.SohoToken)) await soho.LoginAsync(ct).ConfigureAwait(false);
+        var usid = soho.DefaultUserServiceId
+            ?? throw new InvalidOperationException("名下暂无云电脑，SCG 保活跳过");
+        string deviceId = StableSohoDeviceCode();
+
+        Exception? last = null;
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                if (attempt > 1)
+                {
+                    // 对齐 run_scg_keepalive 指数退避：5s×2^(n-1)，上限 60s
+                    int delay = (int)Math.Min(ScgConsts.ForeverBackoffCapS,
+                        ScgConsts.ForeverBackoffBaseS * Math.Pow(2, attempt - 2));
+                    await Task.Delay(TimeSpan.FromSeconds(delay), ct).ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(soho.Soho.SohoToken)) await soho.LoginAsync(ct).ConfigureAwait(false);
+                }
+
+                // reconnect_fn 语义：每次尝试都重取 firm-auth 材料（IP/port/authCode 可能已轮换）
+                var firm = await soho.Soho.GetFirmAuthAsync(usid, ct).ConfigureAwait(false);
+                string scAuthCode = firm.TryGetProperty("scAuthCode", out var sac) && sac.ValueKind == JsonValueKind.String ? sac.GetString() ?? "" : "";
+                string vmId = firm.TryGetProperty("vmId", out var vm) && vm.ValueKind == JsonValueKind.String ? vm.GetString() ?? "" : "";
+                if (scAuthCode == "" || vmId == "")
+                    throw new InvalidOperationException("firm-auth 未下发 scAuthCode/vmId（SCG 材料缺失，通常表示机器未就绪）");
+
+                // 冷启动慢路径整体 140s（lead 口径）：oauth + getConnectInfo + ready 轮询
+                using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                connectCts.CancelAfter(TimeSpan.FromSeconds(140));
+                var (scgIp, scgPort, authCode, _, ready) =
+                    await ScgRoute.GetConnectInfoAsync(scAuthCode, vmId, deviceId, connectCts.Token).ConfigureAwait(false);
+                Log("info", $"SCG 连接信息已获取: {scgIp}:{scgPort} ready={ready}（authCode 已轮换={authCode != scAuthCode}）");
+
+                await using var conn = await ScgRoute.ConnectScgAsync(scgIp, scgPort, authCode, vmId, 10000, ct).ConfigureAwait(false);
+                var hs = await ScgRoute.SpiceHandshakeAsync(conn, vmId, ct).ConfigureAwait(false);
+                Log(hs.SpiceOk ? "success" : "warning",
+                    $"SCG 握手: 通道 {string.Join("/", hs.ConnectedChannels)} spice={(hs.SpiceOk ? "OK" : "未完成")} (spiceSessionId={hs.SpiceSessionId})");
+
+                // 会话切片覆盖整个调度间隔（母本 forever 语义：切片间不断链）
+                int holdSec = Math.Clamp(Row.PulseIntervalSeconds - 15, 60, 3300);
+                var hold = await ScgRoute.HoldAsync(conn, hs.SessionId, hs.SpiceOk, holdSec,
+                    sohoHeartbeatAsync: async token => await soho.Soho.HeartbeatAsync(usid, token).ConfigureAwait(false),
+                    onSlowPlaneError: e => Log("warning", $"SCG 慢平面 SOHO 心跳失败: {e.Message}"),
+                    ct).ConfigureAwait(false);
+                Log("success",
+                    $"SCG 保活切片完成: hold={hold.WallSeconds:F0}s frames={hold.Frames} heartbeats={hold.Heartbeats}(soho {hold.SohoHeartbeats}) switchEcho={hold.TrunkSwitchReplies}");
+                last = null;
+                break;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e)
+            {
+                last = e;
+                var tags = ScgRoute.ClassifySoftFailure(e);
+                Log("warning",
+                    $"SCG 第 {attempt}/3 次失败（recoverable={tags.Recoverable} maintenance={tags.PlatformMaintenance} reason={tags.FailReason}）: {tags.Error}");
+            }
+        }
+
+        if (last != null)
+        {
+            // 母本口径：SCG 异常一律 recoverable → 软失败只告警不熔断；卡片可见
+            Row.LastError = "SCG: " + last.Message;
+            Svc.Db.UpdateAccount(Row);
+            Log("error", $"SCG 保活轮失败（软失败，下轮重拉材料续连）: {last.Message}");
+            return;
+        }
+        Row.LastError = null;
+        Row.LastLoginAt = Db.Now();
+        Svc.Db.UpdateAccount(Row);
+    }
+
+    /// <summary>桌面登出（logout.py desktop_logout；桌面被占用时释放会话锁）。</summary>
+    public async Task<JsonElement> LogoutDesktopAsync(string? userServiceId, CancellationToken ct = default)
+    {
+        if (Platform == YdpcPlatform.Ecloud)
+            throw new InvalidOperationException("桌面会话锁释放仅适用于移动爱家（ydpc-soho）账号");
+        var soho = Soho();
+        if (string.IsNullOrEmpty(soho.Soho.SohoToken)) await soho.LoginAsync(ct).ConfigureAwait(false);
+        var usid = !string.IsNullOrEmpty(userServiceId) ? userServiceId : soho.DefaultUserServiceId
+            ?? throw new InvalidOperationException("未找到有效的 userServiceId");
+        return await soho.Soho.LogoutDesktopAsync(usid, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>账号登出（logout.py account_logout）：/login/logout/v1 + 清本地 sohoToken/userId。</summary>
+    public async Task<JsonElement> AccountLogoutAsync(CancellationToken ct = default)
+    {
+        if (Platform == YdpcPlatform.Ecloud)
+            throw new InvalidOperationException("账号登出仅适用于移动爱家（ydpc-soho）账号");
+        var res = await Soho().Soho.AccountLogoutAsync(ct).ConfigureAwait(false);
+        Row.LastLoginAt = null;
+        Svc.Db.UpdateAccount(Row);
+        return res;
     }
 
     // -----------------------------------------------------------------------

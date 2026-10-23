@@ -368,6 +368,83 @@ public class CyApi : IDisposable
         throw new Exception("验证码接口返回非图片: " + Encoding.UTF8.GetString(bytes, 0, Math.Min(120, bytes.Length)));
     }
 
+    // ---------- 设备绑定（图形码 → 发短信 → 短信码绑定；对齐 XbTianyiKeepalive Protocol/ApiClient.cs 586-662）----------
+    // 触发条件：登录成功后 profile.bondedDevice === false（账号未绑定设备，敏感接口被风控）。
+
+    /// <summary>该登录错误码需要图形验证码（deskapp renderer.js NEED_CAPTCHA_CODES）。</summary>
+    public static readonly int[] NeedCaptchaCodes = [51040, 51030, 51031, 51085];
+
+    /// <summary>该登录错误码是否需要图形验证码。</summary>
+    public static bool NeedsCaptchaCode(int code) => Array.IndexOf(NeedCaptchaCodes, code) >= 0;
+
+    /// <summary>登录成功后 profile.bondedDevice：false=账号未绑定设备（需走绑定流程）；缺省=null。</summary>
+    public bool? BondedDevice =>
+        Profile.ValueKind == JsonValueKind.Object &&
+        Profile.TryGetProperty("bondedDevice", out var b) &&
+        b.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? b.GetBoolean()
+            : null;
+
+    /// <summary>绑定短信的目标手机号：profile.mobilephone 优先，退回 userName；去掉前缀字母 a（对齐 deskapp /^a?/i 清洗）。</summary>
+    public string GetBindSmsPhone()
+    {
+        var phone = Profile.ValueKind == JsonValueKind.Object &&
+                    Profile.TryGetProperty("mobilephone", out var m) &&
+                    m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+        if (string.IsNullOrEmpty(phone)) phone = UserName;
+        return System.Text.RegularExpressions.Regex.Replace(phone ?? "", "^a?", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
+    /// 设备绑定用图形码（端点 validateCode/captcha，需带签名；参数明文。对齐 XbTianyiKeepalive GetBindCaptchaAsync）。
+    /// 返回图片字节，并把响应头 ctg-captcha-key 存入 _captchaKey 供发短信时携带。
+    /// </summary>
+    public async Task<byte[]> GetBindCaptchaAsync()
+    {
+        var url = $"{ApiBase}/api/auth/client/validateCode/captcha?width=200&height=80&_t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        CopySignedHeaders(req);
+        using var resp = await _http.SendAsync(req);
+        var bytes = await resp.Content.ReadAsByteArrayAsync();
+        var key = resp.Headers.TryGetValues("ctg-captcha-key", out var v) ? string.Join("", v) : "";
+        if (key != "") _captchaKey = key;
+        if (bytes.Length < 500)
+            _log("warning", _account, $"[绑定图形码] 异常响应 {bytes.Length}B: {Encoding.UTF8.GetString(bytes, 0, Math.Min(80, bytes.Length))}");
+        return bytes;
+    }
+
+    /// <summary>
+    /// 发送绑定短信（第二步）：GET device/getSmsCode，**ctg-captcha-key 以请求头携带**（对齐 XbTianyiKeepalive SendBindSmsCodeAsync/deskapp sendBindSmsCode）。
+    /// mobilePhone 传纯数字手机号。
+    /// </summary>
+    public Task<ApiResult> SendBindSmsCodeAsync(string mobilePhone, string captchaCode)
+    {
+        var url = "api/cdserv/client/device/getSmsCode?mobilePhone=" + Uri.EscapeDataString(mobilePhone) +
+                  "&captchaCode=" + Uri.EscapeDataString(captchaCode);
+        var extra = _captchaKey != "" ? new Dictionary<string, string> { ["ctg-captcha-key"] = _captchaKey } : null;
+        return ApiAsync("GET", url, extraHeaders: extra);
+    }
+
+    /// <summary>
+    /// 短信验证码绑定设备（第三步）：POST device/binding（对齐 XbTianyiKeepalive BindDeviceAsync，无 smsCodeKey 字段）。
+    /// 成功后建议用同一密码重新登录刷新会话，使 bondedDevice 生效。
+    /// </summary>
+    public Task<ApiResult> BindDeviceAsync(string verificationCode)
+    {
+        var form = new Dictionary<string, string>
+        {
+            ["verificationCode"] = verificationCode,
+            ["deviceName"] = Environment.MachineName,
+            ["deviceCode"] = "web",
+            ["deviceModel"] = "Windows NT 10.0; Win64; x64",
+            ["sysVersion"] = "Windows NT 10.0; Win64; x64",
+            ["appVersion"] = "4.0.1",
+            ["hostName"] = Environment.MachineName,
+            ["deviceInfo"] = "WebBrowser",
+        };
+        return ApiAsync("POST", "api/cdserv/client/device/binding", form: form);
+    }
+
     // ---------- 官方扫码登录 ----------
     public async Task<(string QrCodeId, string QrUrl)> GenQrCodeAsync()
     {

@@ -180,43 +180,56 @@ public sealed class AccountRuntime
         return true;
     }
 
-    // ---------- 短信验证设备（30060/30090 风控的正解：绑定设备后免密凭据与静默续期恢复可用）----------
-    private string _smsCaptchaKey = "";   // 图形码会话密钥（getSmsCode 必须回传）
-    private string _smsCodeKey = "";      // 短信码会话密钥（bindDevice 必须回传）
+    // ---------- 短信验证设备（bondedDevice=false / 30060 风控的正解：图形码→发短信→短信码绑定；对齐 XbTianyiKeepalive）----------
 
-    /// <summary>第一步：取短信流程的图形验证码。</summary>
-    public async Task<(byte[] Image, string Key)> BeginSmsVerificationAsync()
+    /// <summary>第一步：取设备绑定图形验证码（签名请求，validateCode/captcha，ctg-captcha-key 存入实例供发短信携带）。</summary>
+    public async Task<byte[]> BeginSmsVerificationAsync()
     {
         await EnsureLoginAsync();
-        var (img, key) = await Api().GetSmsCaptchaAsync();
-        _smsCaptchaKey = key;
-        return (img, key);
+        return await Api().GetBindCaptchaAsync();
     }
 
-    /// <summary>第二步：图形码校验通过后向手机发送短信验证码（回存 ctg-sms-key 供绑定用）。</summary>
+    /// <summary>第二步：图形码校验通过后向绑定手机发送短信验证码（ctg-captcha-key 以请求头携带）。</summary>
     public async Task<(bool Ok, string Message)> SendSmsCodeAsync(string captchaCode)
     {
         await EnsureLoginAsync();
-        var (r, smsKey) = await Api().SendSmsCodeAsync(Row.User, captchaCode, _smsCaptchaKey);
-        if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
-        _smsCodeKey = smsKey;
-        // 诊断：记录官方响应原文与短信会话密钥是否就位（定位"受理但未收到短信"）
-        Log("info", $"getSmsCode 官方响应: {Truncate(r.Raw, 260)} | ctg-sms-key={(smsKey == "" ? "缺失" : "已返回")}");
-        Log("success", "短信验证码已发送至绑定手机");
+        var phone = Api().GetBindSmsPhone();
+        var r = await Api().SendBindSmsCodeAsync(phone, captchaCode);
+        if (r.Code != 0 && r.Code != 200)
+        {
+            Log("warning", $"发送短信失败 code={r.Code} msg={r.Msg}（图形码错可重试）");
+            return (false, r.Msg);
+        }
+        Log("success", $"短信已发送到 {phone}，请查收");
         return (true, "");
     }
 
-    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n];
-
-    /// <summary>第三步：短信码校验并绑定设备（绑定后免密凭据与静默续期恢复可用）。</summary>
+    /// <summary>第三步：短信码校验并绑定设备；成功后用同密码重登录刷新 bondedDevice=true（风控解除的关键）。</summary>
     public async Task<(bool Ok, string Message)> VerifySmsBindAsync(string verificationCode)
     {
-        await EnsureLoginAsync();
-        var r = await Api().BindDeviceAsync(verificationCode, _smsCodeKey);
-        if (r.Code != 0 && r.Code != 200) return (false, r.Msg);
+        var r = await Api().BindDeviceAsync(verificationCode);
+        if (r.Code != 0)
+        {
+            Log("warning", $"绑定失败 code={r.Code} msg={r.Msg}");
+            return (false, r.Msg);
+        }
+        Log("success", "设备绑定成功 ✓（bondedDevice 状态将在重新登录后刷新）");
+        // 重登录刷新会话（bondedDevice=true 生效，30060 风控解除）；失败也不影响绑定结果
+        var api = Api();
+        api.InvalidateSession();
+        if (Row.EncPassword != "")
+        {
+            var pwd = _db.Unprotect(Row.EncPassword);
+            var r2 = await api.LoginAsync(Row.User, pwd, null);
+            if (r2.Code == 0 && api.LoggedIn)
+            {
+                Row.EncSession = _db.Protect(api.ExportSession());
+                Row.LastLoginAt = Db.Now();
+                _db.UpdateAccount(Row);
+            }
+        }
         Row.LastError = null;
         _db.UpdateAccount(Row);
-        Log("success", "设备绑定成功——风控解除，免密凭据与静默续期恢复可用");
         return (true, "设备绑定成功");
     }
 

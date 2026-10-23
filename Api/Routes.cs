@@ -471,8 +471,8 @@ public static class Routes
         {
             var rt = EngineOf(ctx);
             if (rt == null) return (1, null);
-            var (img, key) = await rt.BeginSmsVerificationAsync();
-            return (0, (IMessage?)new Api.CaptchaImage { Image = "data:image/jpeg;base64," + Convert.ToBase64String(img), Key = key });
+            var img = await rt.BeginSmsVerificationAsync();
+            return (0, (IMessage?)new Api.CaptchaImage { Image = "data:image/jpeg;base64," + Convert.ToBase64String(img), Key = "" });
         });
         MapPost<Api.CaptchaVerifyReq>(app, "/api/account/{id}/sms/send", async (ctx, req) =>
         {

@@ -420,7 +420,7 @@ public class CyApi : IDisposable
     {
         var url = "api/cdserv/client/device/getSmsCode?mobilePhone=" + Uri.EscapeDataString(mobilePhone) +
                   "&captchaCode=" + Uri.EscapeDataString(captchaCode);
-        var extra = _captchaKey != "" ? new Dictionary<string, string> { ["ctg-captcha-key"] = _captchaKey } : new Dictionary<string, string>();
+        var extra = _captchaKey != "" ? new Dictionary<string, string> { ["ctg-captcha-key"] = _captchaKey ?? "" } : new Dictionary<string, string>();
         return ApiAsync("GET", url, extraHeaders: extra);
     }
 

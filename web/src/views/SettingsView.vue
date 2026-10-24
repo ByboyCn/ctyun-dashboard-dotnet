@@ -31,6 +31,28 @@ const saving = ref(false)
 const sysInfo = ref(null)
 
 const CHANNEL_TYPES = ['feishu', 'dingtalk', 'wecom', 'telegram', 'webhook']
+const CHANNEL_LABELS = {
+  feishu: '飞书',
+  dingtalk: '钉钉（加签）',
+  wecom: '企业微信',
+  telegram: 'Telegram',
+  webhook: '自定义 Webhook',
+}
+
+const testingPush = ref(false)
+async function testPush() {
+  if (!form.notifyChannels.length) return ElMessage.warning('请先添加并保存推送渠道')
+  testingPush.value = true
+  try {
+    const br = await settingsApi.notifyTest()
+    if (br.ok) ElMessage.success('测试推送已发出：' + br.detail)
+    else ElMessage.error('测试结果：' + br.detail)
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    testingPush.value = false
+  }
+}
 
 function addChannel() {
   form.notifyChannels.push({ type: 'feishu', url: '', secret: '', accScope: '' })
@@ -161,13 +183,14 @@ onMounted(() => {
         <div style="display: flex; align-items: center; gap: 10px">
           <span class="form-hint">仅错误时通知</span>
           <el-switch v-model="form.notifyOnErrorOnly" />
+          <el-button size="small" :loading="testingPush" @click="testPush">发送测试</el-button>
           <el-button size="small" type="primary" plain @click="addChannel">+ 添加渠道</el-button>
         </div>
       </div>
 
       <div v-for="(ch, i) in form.notifyChannels" :key="i" class="channel-row">
-        <el-select v-model="ch.type" style="width: 140px" filterable allow-create default-first-option placeholder="类型">
-          <el-option v-for="t in CHANNEL_TYPES" :key="t" :label="t" :value="t" />
+        <el-select v-model="ch.type" style="width: 160px" filterable allow-create default-first-option placeholder="类型">
+          <el-option v-for="(label, t) in CHANNEL_LABELS" :key="t" :label="label" :value="t" />
         </el-select>
         <el-input v-model="ch.url" placeholder="Webhook 地址" style="flex: 1; min-width: 240px" />
         <el-input v-model="ch.secret" placeholder="签名密钥（可选）" style="width: 200px" show-password />

@@ -27,6 +27,24 @@ public sealed class NotifyHub
         }
     }
 
+    /// <summary>测试推送：向全部已配置渠道发测试消息（忽略账号范围与仅错误过滤），返回逐渠道结果。</summary>
+    public async Task<string> SendTestAsync()
+    {
+        var settings = _db.GetSettings();
+        if (settings.NotifyChannels.Count == 0) return "未配置任何通知渠道";
+        var results = new List<string>();
+        foreach (var ch in settings.NotifyChannels)
+        {
+            try
+            {
+                await SendChannelAsync(ch, "测试", "✅ 渠道测试成功", "如果你收到这条消息，说明该推送渠道配置成功（CtyunDashboard）");
+                results.Add(ch.Type + ":✓");
+            }
+            catch (Exception ex) { results.Add(ch.Type + ":✗ " + ex.Message); }
+        }
+        return string.Join(" | ", results);
+    }
+
     private static bool IsErrorTitle(string title) =>
         title.Contains("失败") || title.Contains("异常") || title.Contains("错误");
 

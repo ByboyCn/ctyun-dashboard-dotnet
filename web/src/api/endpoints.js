@@ -128,6 +128,7 @@ export const userApi = {
 export const settingsApi = {
   get: () => rpc('/api/settings', null, null, 'SettingsMsg', { method: 'GET' }),
   save: (s) => rpc('/api/settings', 'SettingsMsg', s, 'BoolReply'),
+  notifyTest: () => rpc('/api/settings/notify/test', null, null, 'BoolReply', { method: 'GET', acceptCodes: [0, 1] }),
 }
 
 export const logApi = {

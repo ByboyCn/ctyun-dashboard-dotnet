@@ -359,6 +359,13 @@ public static class Routes
             if (CurrentUser(ctx)?.Role != "admin") return Task.FromResult<(int, IMessage?)>(new(1, null));
             return Task.FromResult<(int, IMessage?)>(new(0, ToSettingsMsg(Svc.Db.GetSettings())));
         });
+        MapGet(app, "/api/settings/notify/test", async ctx =>
+        {
+            if (CurrentUser(ctx)?.Role != "admin") return (1, null);
+            var detail = await Svc.NotifyHubField.SendTestAsync();
+            var ok = !detail.Contains("✗") && detail != "未配置任何通知渠道";
+            return (ok ? 0 : 1, (IMessage?)new Api.BoolReply { Ok = ok, Detail = detail });
+        });
         MapPost<Api.SettingsMsg>(app, "/api/settings", (ctx, req) =>
         {
             if (CurrentUser(ctx)?.Role != "admin") return Task.FromResult<(int, IMessage?)>(new(1, null));

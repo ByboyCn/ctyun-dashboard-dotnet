@@ -44,6 +44,7 @@ async function testPush() {
   if (!form.notifyChannels.length) return ElMessage.warning('请先添加并保存推送渠道')
   testingPush.value = true
   try {
+    await settingsApi.save({ ...form })   // 先落盘（测试读的是服务端配置），免得"加了渠道没保存→未配置"困惑
     const br = await settingsApi.notifyTest()
     if (br.ok) ElMessage.success('测试推送已发出：' + br.detail)
     else ElMessage.error('测试结果：' + br.detail)

@@ -165,6 +165,8 @@ public sealed class YdpcAccountRuntime
             Row.LastError = null;
             Row.LastLoginAt = Db.Now();
             Svc.Db.UpdateAccount(Row);
+            _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活完成 - {Row.Name}",
+                $"SOHO 心跳 ✓（ZTE 通道）\n下次保活: {Math.Clamp(Row.PulseIntervalSeconds, 60, 604800) / 3600.0:0.#} 小时后");
         }
         else if (r.Skipped)
         {
@@ -175,10 +177,12 @@ public sealed class YdpcAccountRuntime
             Row.LastError = r.FailureText != "" ? r.FailureText : r.Message;
             Svc.Db.UpdateAccount(Row);
             Log("error", $"保活轮硬失败: {Row.LastError}");
+            _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活失败 - {Row.Name}", Row.LastError);
         }
         else
         {
             Log("warning", $"保活轮软失败(不熔断): {r.FailureText}");
+            _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活异常 - {Row.Name}", r.FailureText != "" ? r.FailureText : r.Message);
         }
     }
 
@@ -540,6 +544,7 @@ public sealed class YdpcAccountRuntime
         }
 
         // ── L2 桌面登记保活（逐台）────────────────────────────────────────
+        var l2Lines = new List<string>();
         foreach (var desk in Svc.Db.DesktopsOf(Row.Id).Where(d => d.KeepaliveEnabled))
         {
             var (machineId, poolUid) = ParseDesktopRaw(desk.RawJson);
@@ -562,10 +567,12 @@ public sealed class YdpcAccountRuntime
                     Svc.Db.UpdateDesktop(desk);
                 }
                 Log("success", $"[{desk.Name}] L2 桌面登记成功{(ds.LastUptime != "" ? $" · 在线时长 {ds.LastUptime}" : "")}");
+                l2Lines.Add($"✅ {desk.Name}" + (ds.LastUptime != "" ? $"（在线 {ds.LastUptime}）" : ""));
             }
             else
             {
                 Log("warning", $"[{desk.Name}] L2 桌面登记失败: {ds.LastError}");
+                l2Lines.Add($"❌ {desk.Name}（{ds.LastError}）");
                 if (ds.LastErrorTokenExpired)
                 {
                     Log("warning", $"[{desk.Name}] L2 报告 token 失效，请求重登");
@@ -573,6 +580,13 @@ public sealed class YdpcAccountRuntime
                 }
             }
         }
+
+        // ── 保活轮完成 → 企业微信等渠道推送（NotifyHub 按系统设置分发）──────
+        var l1Text = outcome.Ok == true ? "✅ 通过" : outcome.Ok == false ? "❌ token 失效" : "⚠️ 端点失败";
+        var body = $"L1 账号探针 {l1Text}";
+        if (l2Lines.Count > 0) body += "\n" + string.Join("\n", l2Lines);
+        body += $"\n下次保活: {Math.Clamp(Row.PulseIntervalSeconds, 60, 604800) / 3600.0:0.#} 小时后";
+        _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活完成 - {Row.Name}", body);
     }
 
     private static (string MachineId, string PoolUid) ParseDesktopRaw(string rawJson)

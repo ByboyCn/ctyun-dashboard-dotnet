@@ -756,6 +756,8 @@ public sealed class Engine
             List<SmDesktop> desks;
             try { desks = _db.DesktopsOf(rt.Row.Id).Where(d => d.KeepaliveEnabled).ToList(); }
             catch { continue; }
+            int okCount = 0, failCount = 0, scheduled = 0, done = 0;
+            var rtName = rt.Row.Name;
             foreach (var desk in desks)
             {
                 var interval = Math.Clamp(desk.KeepaliveInterval ?? rt.Row.PulseIntervalSeconds, 10, 604800);   // 10 秒 ~ 7 天
@@ -764,6 +766,7 @@ public sealed class Engine
                 var key = rt.Row.Id + ":" + desk.DesktopId;
                 if (!_busy.TryAdd(key, 0)) continue;
                 var gate = _pulseGates.GetOrAdd(rt.Row.Id, _ => new SemaphoreSlim(3, 3));   // 每账号最多 3 路并发脉冲（172 台齐发会把连接打爆）
+                Interlocked.Increment(ref scheduled);
                 _ = Task.Run(async () =>
                 {
                     try
@@ -772,12 +775,36 @@ public sealed class Engine
                         try
                         {
                             if (!rt.HangRunning)
-                                await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
+                            {
+                                var ok = await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
+                                if (ok) Interlocked.Increment(ref okCount); else Interlocked.Increment(ref failCount);
+                            }
                         }
                         finally { gate.Release(); }
                     }
                     catch { }
-                    finally { _busy.TryRemove(key, out _); }
+                    finally
+                    {
+                        _busy.TryRemove(key, out _);
+                        Interlocked.Increment(ref done);
+                    }
+                });
+            }
+            // 本轮全部调度完后 → 等所有脉冲落定 → 企业微信等渠道推送汇总
+            if (scheduled > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    for (var i = 0; i < 180; i++)   // 最多等 30 分钟（172 台 ÷ 3 并发 ≈ 19 分钟）
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(10));
+                        if (Volatile.Read(ref done) >= Volatile.Read(ref scheduled)) break;
+                    }
+                    var ok = Volatile.Read(ref okCount);
+                    var fail = Volatile.Read(ref failCount);
+                    var body = $"保活脉冲: ✅ {ok} / ❌ {fail}（共 {scheduled} 台）";
+                    if (fail > 0) body += "\n失败桌面可在设备墙查看详情";
+                    _ = Svc.NotifyHubField.SendAsync(rtName, $"天翼云保活完成 - {rtName}", body);
                 });
             }
         }

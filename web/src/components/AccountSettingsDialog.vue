@@ -27,6 +27,7 @@ const form = reactive({
   redeemStrategy: '',
   redeemDay: 1,
   redeemStepDays: 3,
+  protocol: '',
 })
 const saving = ref(false)
 
@@ -44,6 +45,8 @@ watch(visible, (v) => {
     redeemStrategy: '',
     redeemDay: 1,
     redeemStepDays: 3,
+    // 当前协议回显（AccountCard.protocol=23；ydpc 账号默认 ZTE）
+    protocol: String(c.protocol || ''),
   })
 })
 
@@ -57,6 +60,10 @@ async function save() {
     autoAi: form.autoAi,
     autoHang: form.autoHang,
     autoRedeem: form.autoRedeem,
+  }
+  // 保活协议：仅 ydpc 账号；proto3 空字符串不序列化 = 不修改
+  if (props.platform === 'ydpc' && form.protocol) {
+    payload.protocol = form.protocol
   }
   // redeem 策略：仅在用户显式选择时下发（proto3 零值字段不会序列化）
   if (form.redeemStrategy) {
@@ -91,6 +98,15 @@ async function save() {
       <el-form-item label="脉冲间隔(秒)">
         <el-input-number v-model="form.pulseInterval" :min="10" :max="604800" :step="300" />
         <span class="form-hint" style="margin-left: 10px">10 ~ 604800 秒 ≈ {{ formatInterval(form.pulseInterval) }}</span>
+      </el-form-item>
+      <el-form-item v-if="platform === 'ydpc'" label="保活协议">
+        <el-radio-group v-model="form.protocol">
+          <el-radio value="ZTE">中兴 ZTE</el-radio>
+          <el-radio value="SCG">深信服 SCG</el-radio>
+        </el-radio-group>
+        <div class="form-hint" style="width: 100%">
+          {{ form.protocol === 'SCG' ? '深信服通道，适用于深信服类型桌面' : '中兴通道（默认）' }}
+        </div>
       </el-form-item>
       <el-form-item label="自动打卡">
         <el-switch v-model="form.autoSign" />

@@ -162,6 +162,9 @@ const smsDeviceVisible = ref(false)
     <div class="ac-head">
       <div class="ac-name" :title="card.userMasked">
         {{ card.name || '未命名账号' }}
+        <span v-if="platform === 'ydpc' && card.protocol" class="ac-proto" :title="card.protocol === 'SCG' ? '深信服通道，适用于深信服类型桌面' : '中兴通道（默认）'">
+          {{ card.protocol }}
+        </span>
         <span class="ac-user">{{ card.userMasked || card.owner || '' }}</span>
       </div>
       <div class="ac-head-right">

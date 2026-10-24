@@ -32,7 +32,7 @@ watch(
 )
 
 function reset() {
-  Object.assign(pwdForm, { name: '', user: '', password: '', ydPlatform: 'soho' })
+  Object.assign(pwdForm, { name: '', user: '', password: '', ydPlatform: 'soho', protocol: 'ZTE' })
   Object.assign(captcha, { need: false, image: '', key: '', code: '' })
   Object.assign(sms, {
     active: false,
@@ -57,7 +57,7 @@ function reset() {
 }
 
 // ===== 方式一：账密（+图形验证码） =====
-const pwdForm = reactive({ name: '', user: '', password: '', ydPlatform: 'soho' })
+const pwdForm = reactive({ name: '', user: '', password: '', ydPlatform: 'soho', protocol: 'ZTE' })
 const captcha = reactive({ need: false, image: '', key: '', code: '' })
 const submitting = ref(false)
 const fetchingCaptcha = ref(false)
@@ -186,6 +186,8 @@ async function submitPassword() {
     password: pwdForm.password,
     // proto AddAccountReq.platform（字段15）：空=天翼云；ydpc-soho / ydpc-ecloud = 移动云
     platform: props.platform === 'ydpc' ? `ydpc-${pwdForm.ydPlatform}` : '',
+    // proto AddAccountReq.protocol（字段16）：仅 ydpc 有意义（ZTE 默认 / SCG 深信服）；天翼云不带
+    protocol: props.platform === 'ydpc' ? pwdForm.protocol : '',
   }
   if (captcha.need) {
     if (!captcha.code) return ElMessage.warning('请输入图形验证码')
@@ -344,6 +346,15 @@ onBeforeUnmount(() => {
           <el-radio value="soho">SOHO（和家亲）</el-radio>
           <el-radio value="ecloud">ECLOUD（移动云电脑）</el-radio>
         </el-radio-group>
+      </el-form-item>
+      <el-form-item v-if="platform === 'ydpc'" label="保活协议">
+        <el-radio-group v-model="pwdForm.protocol">
+          <el-radio value="ZTE">中兴 ZTE（默认）</el-radio>
+          <el-radio value="SCG">深信服 SCG</el-radio>
+        </el-radio-group>
+        <div class="form-hint" style="width: 100%">
+          {{ pwdForm.protocol === 'SCG' ? '深信服通道，适用于深信服类型桌面' : '中兴通道（默认）' }}
+        </div>
       </el-form-item>
       <el-form-item label="备注名称">
         <el-input v-model="pwdForm.name" placeholder="可选，方便识别" maxlength="50" />

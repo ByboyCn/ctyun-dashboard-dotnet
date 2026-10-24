@@ -444,6 +444,19 @@ body {
   margin-top: 2px;
 }
 
+/* 移动云保活协议角标（ZTE / SCG） */
+.ac-proto {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  vertical-align: 2px;
+  color: var(--c-online);
+  background: var(--c-online-bg);
+}
+
 .ac-head-right {
   display: flex;
   align-items: center;

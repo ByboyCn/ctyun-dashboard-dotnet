@@ -165,19 +165,31 @@ public sealed class EcloudHttpUtil : IDisposable
     public JsonObject CommonParams { get; }
     public string? AccessToken { get; private set; }
 
-    /// <summary>trust_env 默认关闭（Clash/VPN MITM 会打崩 cloudpc TLS；ECLOUD_TRUST_ENV=1 才启用系统代理）。</summary>
+    /// <summary>
+    /// 代理优先级：ECLOUD_PROXY_URL（显式 http 代理，推荐用中国中转）＞ ECLOUD_TRUST_ENV（系统代理）＞ 无代理。
+    /// 移动公众接口（cloudpc.ecloud.10086.cn）对海外 IP 返回 403/路由不可达 —— 部署在海外时必须配中国代理。
+    /// </summary>
     public EcloudHttpUtil(JsonObject commonParams)
     {
         CommonParams = commonParams;
         bool trustEnv = string.Equals(Environment.GetEnvironmentVariable("ECLOUD_TRUST_ENV")?.Trim().ToLowerInvariant(), "1")
             || string.Equals(Environment.GetEnvironmentVariable("ECLOUD_TRUST_ENV")?.Trim().ToLowerInvariant(), "true");
+        var proxyUrl = Environment.GetEnvironmentVariable("ECLOUD_PROXY_URL")?.Trim();
         _handler = new HttpClientHandler
         {
             UseCookies = false,
             AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-            Proxy = trustEnv ? System.Net.WebRequest.DefaultWebProxy : null,
-            UseProxy = trustEnv,
         };
+        if (!string.IsNullOrEmpty(proxyUrl))
+        {
+            _handler.Proxy = new System.Net.WebProxy(proxyUrl);
+            _handler.UseProxy = true;
+        }
+        else if (trustEnv)
+        {
+            _handler.Proxy = System.Net.WebRequest.DefaultWebProxy;
+            _handler.UseProxy = true;
+        }
         _http = new HttpClient(_handler) { Timeout = TimeSpan.FromSeconds(EcloudConfig.ApiTimeoutSec + 10) };
         _http.DefaultRequestHeaders.TryAddWithoutValidation("Content-Type", "application/json");
         _http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", EcloudConfig.UserAgent);

@@ -251,10 +251,11 @@ public sealed class AccountRuntime
     // ---------- 旁观者脉冲 / 认领会话 ----------
     private DateTime _lastSkipLog;
 
-    /// <summary>对一台云电脑执行一次保活会话。claim=false 旁观者脉冲；claim=true 认领（挂机/打卡）。</summary>
+    /// <summary>对一台云电脑执行一次保活会话。claim=false 旁观者脉冲；claim=true 认领（挂机/打卡）。
+    /// 认领闸（_claimGate）仅约束认领会话——旁观者脉冲互不冲突，也不与认领争锁（3 并发闸已在调用侧限流）。</summary>
     public async Task<bool> PulseSessionAsync(SmDesktop desk, bool claim, int holdSec, string reason)
     {
-        if (!_claimGate.Wait(0))
+        if (claim && !_claimGate.Wait(0))
         {
             if ((DateTime.Now - _lastSkipLog).TotalSeconds >= 60)   // 认领期间每台每分钟只刷一条，避免 172 台 × 5 秒刷屏
             {
@@ -319,7 +320,7 @@ public sealed class AccountRuntime
             _db.TouchPulse(Row.Id, desk.DesktopId);
             try { await Api().QuitConnectAsync(desk.DesktopId); } catch { }
             _ = PulseHook.FireAsync(_db, Name, desk.DesktopId, DesktopCodeOf(desk), desk.Name, hookOk, hookErr, HoldSecs(startedAt), reason);
-            _claimGate.Release();
+            if (claim) _claimGate.Release();
         }
     }
 

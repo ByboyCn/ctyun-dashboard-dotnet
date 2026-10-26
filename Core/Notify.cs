@@ -21,7 +21,8 @@ public sealed class NotifyHub
         if (settings.NotifyOnErrorOnly && !IsErrorTitle(title)) return;
         foreach (var ch in settings.NotifyChannels)
         {
-            if (ch.AccScope != "*" && ch.AccScope != account) continue;
+            // 空 = 全部账号（界面约定"留空=全部"）；"*" = 全部；否则精确匹配账号名
+            if (ch.AccScope is not ("" or "*") && ch.AccScope != account) continue;
             try { await SendChannelAsync(ch, account, title, body); }
             catch (Exception ex) { _log.Write("warning", "Notify", account, "推送失败[" + ch.Type + "]: " + ex.Message); }
         }

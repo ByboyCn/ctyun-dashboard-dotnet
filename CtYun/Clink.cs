@@ -97,6 +97,14 @@ public sealed class ClinkMain : IDisposable
         _ws.Options.SetRequestHeader("User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36");
         _ws.Options.KeepAliveInterval = Timeout.InfiniteTimeSpan; // 心跳自己发（Type 7）
+        // CLINK 网关（国内）从海外机房不可达（脉冲全超时）→ 支持经中国代理隧道出站：
+        // CTYUN_PROXY_URL=http://host:port（与 ECLOUD_PROXY_URL 同一代理即可，CONNECT 隧道透传 wss）
+        var wsProxy = Environment.GetEnvironmentVariable("CTYUN_PROXY_URL")?.Trim();
+        if (!string.IsNullOrEmpty(wsProxy))
+        {
+            _ws.Options.Proxy = new System.Net.WebProxy(wsProxy);
+            _log("info", account, "CLINK 心跳走代理出站: " + wsProxy);
+        }
     }
 
     private static string Esc(string s) => (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "").Replace("\r", "");

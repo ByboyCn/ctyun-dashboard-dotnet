@@ -626,7 +626,19 @@ public sealed class YdpcAccountRuntime
 
         if (!await EnsureEcloudSessionAsync(ct).ConfigureAwait(false))
             throw new InvalidOperationException("会话不可用（未登录或需要短信验证）");
-        var desks = await EcloudDesktops.GetDesktopsWithStatusAsync(EcloudHttp(), ct).ConfigureAwait(false);
+        List<CtyunDashboard.Ecloud.EcloudDesktop> desks;
+        try
+        {
+            desks = await EcloudDesktops.GetDesktopsWithStatusAsync(EcloudHttp(), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex.Message.Contains("401") || ex.Message.Contains("token", StringComparison.OrdinalIgnoreCase))
+        {
+            // 瞬时竞态：请求恰好用了轮换前的旧 token → 自动重登后重试一次（不把 401 弹给前端）
+            Log("info", "桌面同步遇到 401/token 失效（token 轮换竞态），自动重登后重试");
+            var (ok, msg) = await EcloudAutoReloginAsync(ct).ConfigureAwait(false);
+            if (!ok) throw new InvalidOperationException("重登失败: " + msg);
+            desks = await EcloudDesktops.GetDesktopsWithStatusAsync(EcloudHttp(), ct).ConfigureAwait(false);
+        }
         var mapped = desks.Select(d => (
             Id: d.InstanceId,
             Name: d.MachineName != "" ? d.MachineName : d.InstanceId,

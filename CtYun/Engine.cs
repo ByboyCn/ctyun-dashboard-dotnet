@@ -245,6 +245,9 @@ public sealed class AccountRuntime
 
     internal List<(string Name, int Current, int Total, int Status, int Points)> TasksSnapshot => _tasks;
 
+    /// <summary>认领通道当前被占用（挂机/打卡任务进行中）——旁观者脉冲此时按设计避让。</summary>
+    public bool ClaimGateBusy => _claimGate.CurrentCount == 0;
+
     // ---------- 旁观者脉冲 / 认领会话 ----------
     private DateTime _lastSkipLog;
 
@@ -756,7 +759,7 @@ public sealed class Engine
             List<SmDesktop> desks;
             try { desks = _db.DesktopsOf(rt.Row.Id).Where(d => d.KeepaliveEnabled).ToList(); }
             catch { continue; }
-            int okCount = 0, failCount = 0, scheduled = 0, done = 0;
+            int okCount = 0, failCount = 0, skipCount = 0, scheduled = 0, done = 0;
             var rtName = rt.Row.Name;
             foreach (var desk in desks)
             {
@@ -776,8 +779,15 @@ public sealed class Engine
                         {
                             if (!rt.HangRunning)
                             {
-                                var ok = await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
-                                if (ok) Interlocked.Increment(ref okCount); else Interlocked.Increment(ref failCount);
+                                if (rt.ClaimGateBusy)
+                                {
+                                    Interlocked.Increment(ref skipCount);   // 认领会话进行中，按设计避让（非失败）
+                                }
+                                else
+                                {
+                                    var ok = await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
+                                    if (ok) Interlocked.Increment(ref okCount); else Interlocked.Increment(ref failCount);
+                                }
                             }
                         }
                         finally { gate.Release(); }
@@ -802,8 +812,10 @@ public sealed class Engine
                     }
                     var ok = Volatile.Read(ref okCount);
                     var fail = Volatile.Read(ref failCount);
-                    var body = $"保活脉冲: ✅ {ok} / ❌ {fail}（共 {scheduled} 台）";
+                    var skip = Volatile.Read(ref skipCount);
+                    var body = $"保活脉冲: ✅ {ok} / ❌ {fail}" + (skip > 0 ? $" / ⏭ 认领避让 {skip}" : "") + $"（共 {scheduled} 台）";
                     if (fail > 0) body += "\n失败桌面可在设备墙查看详情";
+                    if (skip > 0) body += "\n（认领避让 = 打卡/挂机会话进行中，属正常，下轮自动补）";
                     _ = Svc.NotifyHubField.SendAsync(rtName, $"天翼云保活完成 - {rtName}", body);
                 });
             }

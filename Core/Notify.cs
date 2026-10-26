@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -12,6 +13,7 @@ public sealed class NotifyHub
     private readonly Db _db;
     private readonly LogHub _log;
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly ConcurrentDictionary<string, DateTime> LastSentAt = new();   // 同渠道同标题 30 分钟去重（防故障期刷屏）
 
     public NotifyHub(Db db, LogHub log) { _db = db; _log = log; }
 
@@ -23,6 +25,11 @@ public sealed class NotifyHub
         {
             // 空 = 全部账号（界面约定"留空=全部"）；"*" = 全部；否则精确匹配账号名
             if (ch.AccScope is not ("" or "*") && ch.AccScope != account) continue;
+            // 去重：同渠道同标题 30 分钟内只推一次（账号维度区分），防故障期连环刷屏
+            var dedupeKey = ch.Type + "|" + account + "|" + title;
+            var now = DateTime.Now;
+            if (LastSentAt.TryGetValue(dedupeKey, out var last) && (now - last).TotalMinutes < 30) continue;
+            LastSentAt[dedupeKey] = now;
             try { await SendChannelAsync(ch, account, title, body); }
             catch (Exception ex) { _log.Write("warning", "Notify", account, "推送失败[" + ch.Type + "]: " + ex.Message); }
         }

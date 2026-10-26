@@ -146,7 +146,13 @@ public sealed class ClinkMain : IDisposable
         var authCode = await ReadExactAsync(4, ct);
         if (BinaryPrimitives.ReadInt32LittleEndian(authCode) != 0) throw new Exception("AuthReply code!=0");
 
+        // 【根因修复】认证已通过（AuthReply==0）：完成 ReadyTask。
+        // 此前 _ready 只在 ReceiveLoopAsync 的 finally（连接退出）里 TrySetResult，
+        // 成功路径永不完成 → Engine 的 ReadyTask.WaitAsync(30s) 必然超时
+        //（表象恰似"服务端不回 AuthReply"，但 103/MAIN_INIT 能到达即证明认证早已通过）。
         Ready = true;
+        _ready.TrySetResult();
+        _log("info", _account, $"CLINK 认证通过 (ticket={ticket.Length}B, earlyLogin={_earlyLogin})");
         _ = Task.Run(() => ReceiveLoopAsync(_cts.Token));
         _ = Task.Run(async () =>   // CLINK_MSGC_HEARTBEAT Type 7
         {
@@ -285,7 +291,15 @@ public sealed class ClinkMain : IDisposable
         finally
         {
             Ready = false;
-            _ready.TrySetResult();
+            // 成功路径已在认证通过点 TrySetResult（此处幂等）；失败/提前断开路径
+            // 以异常完成，让 Engine 的 WaitAsync 立刻失败而不是空等 30 秒。
+            if (!_ready.Task.IsCompleted)
+            {
+                if (!string.IsNullOrEmpty(LastCloseReason))
+                    _ready.TrySetException(new IOException("CLINK 连接在就绪前关闭: " + LastCloseReason));
+                else
+                    _ready.TrySetResult();
+            }
         }
     }
 

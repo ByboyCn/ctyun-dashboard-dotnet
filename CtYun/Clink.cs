@@ -79,6 +79,8 @@ public sealed class ClinkMain : IDisposable
     private bool _claim;
     private bool _earlyLogin;
     private uint _ackWindow, _untilAck;
+    private readonly bool _dump =
+        string.Equals(Environment.GetEnvironmentVariable("CTYUN_CLINK_DUMP")?.Trim(), "1", StringComparison.OrdinalIgnoreCase);
 
     public bool Ready { get; private set; }
     public bool HandshakeDone { get; private set; }
@@ -141,6 +143,7 @@ public sealed class ClinkMain : IDisposable
         var auth = new byte[4 + ticket.Length];
         BinaryPrimitives.WriteInt32LittleEndian(auth, 1);
         ticket.CopyTo(auth, 4);
+        _log("info", _account, $"CLINK ticket 已提交 ({ticket.Length}B, SPKI 前缀 0x{pubKey[0]:X2}{pubKey[1]:X2}, earlyLogin={_earlyLogin})，等待 AuthReply…");
         await SendBinaryAsync(auth, ct);
 
         var authCode = await ReadExactAsync(4, ct);
@@ -219,6 +222,12 @@ public sealed class ClinkMain : IDisposable
 
     private async Task OnMessageAsync(ushort type, byte[] payload, CancellationToken ct)
     {
+        // 【诊断】CTYUN_CLINK_DUMP=1 时逐帧 dump（REDQ 后收到的每一条 mini 帧进日志）
+        if (_dump)
+        {
+            var head = Convert.ToHexString(payload, 0, Math.Min(payload.Length, 32));
+            _log("info", _account, $"[dump] 帧 type={type} len={payload.Length} hex={(payload.Length > 32 ? head + "…" : head)}");
+        }
         if (type == 3 && payload.Length == 8)
         {
             _ackWindow = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4));

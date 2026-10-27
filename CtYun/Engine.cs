@@ -23,6 +23,26 @@ public sealed class AccountRuntime
     public DateTime? HangUntil;
     private List<(string Name, int Current, int Total, int Status, int Points)> _tasks = [];
 
+    // ---- 保活汇总（按窗口聚合推送，替代每 tick 微快照）----
+    private int _pulseOk, _pulseFail;
+    private DateTime _pulseWindowAt = DateTime.Now;
+
+    /// <summary>脉冲完成后累计到当前聚合窗口。</summary>
+    public void CountPulse(bool ok)
+    {
+        if (ok) Interlocked.Increment(ref _pulseOk); else Interlocked.Increment(ref _pulseFail);
+    }
+
+    /// <summary>窗口到期则取走累计（未到期返回 (0,0) 并保留累计）。</summary>
+    public (int Ok, int Fail) PopPulseWindow(TimeSpan window)
+    {
+        if ((DateTime.Now - _pulseWindowAt) < window) return (0, 0);
+        var ok = Interlocked.Exchange(ref _pulseOk, 0);
+        var fail = Interlocked.Exchange(ref _pulseFail, 0);
+        _pulseWindowAt = DateTime.Now;
+        return ok + fail == 0 ? (0, 0) : (ok, fail);
+    }
+
     public string Id => Row.Id;
     public string Name => string.IsNullOrEmpty(Row.Name) ? Row.User : Row.Name;
 
@@ -760,8 +780,6 @@ public sealed class Engine
             List<SmDesktop> desks;
             try { desks = _db.DesktopsOf(rt.Row.Id).Where(d => d.KeepaliveEnabled).ToList(); }
             catch { continue; }
-            int okCount = 0, failCount = 0, skipCount = 0, scheduled = 0, done = 0;
-            var rtName = rt.Row.Name;
             foreach (var desk in desks)
             {
                 var interval = Math.Clamp(desk.KeepaliveInterval ?? rt.Row.PulseIntervalSeconds, 10, 604800);   // 10 秒 ~ 7 天
@@ -770,7 +788,6 @@ public sealed class Engine
                 var key = rt.Row.Id + ":" + desk.DesktopId;
                 if (!_busy.TryAdd(key, 0)) continue;
                 var gate = _pulseGates.GetOrAdd(rt.Row.Id, _ => new SemaphoreSlim(3, 3));   // 每账号最多 3 路并发脉冲（172 台齐发会把连接打爆）
-                Interlocked.Increment(ref scheduled);
                 _ = Task.Run(async () =>
                 {
                     try
@@ -782,44 +799,33 @@ public sealed class Engine
                             {
                                 if (rt.ClaimGateBusy)
                                 {
-                                    Interlocked.Increment(ref skipCount);   // 认领会话进行中，按设计避让（非失败）
+                                    // 认领会话进行中，按设计避让（正常，下轮自动补）——不计数不推送
                                 }
                                 else
                                 {
                                     var ok = await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
-                                    if (ok) Interlocked.Increment(ref okCount); else Interlocked.Increment(ref failCount);
+                                    rt.CountPulse(ok);
                                 }
                             }
                         }
                         finally { gate.Release(); }
                     }
                     catch { }
-                    finally
-                    {
-                        _busy.TryRemove(key, out _);
-                        Interlocked.Increment(ref done);
-                    }
+                    finally { _busy.TryRemove(key, out _); }
                 });
             }
-            // 本轮全部调度完后 → 等所有脉冲落定 → 企业微信等渠道推送汇总
-            if (scheduled > 0)
-            {
-                _ = Task.Run(async () =>
-                {
-                    for (var i = 0; i < 180; i++)   // 最多等 30 分钟（172 台 ÷ 3 并发 ≈ 19 分钟）
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(10));
-                        if (Volatile.Read(ref done) >= Volatile.Read(ref scheduled)) break;
-                    }
-                    var ok = Volatile.Read(ref okCount);
-                    var fail = Volatile.Read(ref failCount);
-                    var skip = Volatile.Read(ref skipCount);
-                    var body = $"保活脉冲: ✅ {ok} / ❌ {fail}" + (skip > 0 ? $" / ⏭ 认领避让 {skip}" : "") + $"（共 {scheduled} 台）";
-                    if (fail > 0) body += "\n失败桌面可在设备墙查看详情";
-                    if (skip > 0) body += "\n（认领避让 = 打卡/挂机会话进行中，属正常，下轮自动补）";
-                    _ = Svc.NotifyHubField.SendAsync(rtName, $"天翼云保活完成 - {rtName}", body);
-                });
-            }
+        }
+
+        // ---- 天翼云保活简报：按账号保活周期窗口聚合推送（替代每 tick 微快照）----
+        foreach (var rt in _runtimes.Values)
+        {
+            if (!rt.Row.KeepaliveEnabled) continue;
+            var window = TimeSpan.FromHours(6);
+            var (ok, fail) = rt.PopPulseWindow(window);
+            if (ok + fail == 0) continue;
+            var body = $"保活脉冲: ✅ {ok} / ❌ {fail}（过去 6 小时）";
+            if (fail > 0) body += "\n失败桌面可在设备墙查看详情";
+            _ = Svc.NotifyHubField.SendAsync(rt.Row.Name, $"天翼云保活简报 - {rt.Row.Name}", body);
         }
 
         // ---- 移动云（ydpc-soho / ydpc-ecloud）：账号级周期调度（ydpc 集成；天翼逻辑不受影响）----

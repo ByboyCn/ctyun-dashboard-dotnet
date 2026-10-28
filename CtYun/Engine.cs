@@ -26,21 +26,27 @@ public sealed class AccountRuntime
     // ---- 保活汇总（按窗口聚合推送，替代每 tick 微快照）----
     private int _pulseOk, _pulseFail;
     private DateTime _pulseWindowAt = DateTime.Now;
+    private readonly ConcurrentQueue<string> _pulseFailures = new();
 
-    /// <summary>脉冲完成后累计到当前聚合窗口。</summary>
-    public void CountPulse(bool ok)
+    /// <summary>脉冲完成后累计到当前聚合窗口（失败时附桌面名与原因，随窗口简报推送）。</summary>
+    public void CountPulse(bool ok, string deskName, string error)
     {
-        if (ok) Interlocked.Increment(ref _pulseOk); else Interlocked.Increment(ref _pulseFail);
+        if (ok) { Interlocked.Increment(ref _pulseOk); return; }
+        Interlocked.Increment(ref _pulseFail);
+        if (!string.IsNullOrEmpty(deskName))
+            _pulseFailures.Enqueue("❌ " + deskName + (string.IsNullOrEmpty(error) ? "" : "：" + error));
     }
 
-    /// <summary>窗口到期则取走累计（未到期返回 (0,0) 并保留累计）。</summary>
-    public (int Ok, int Fail) PopPulseWindow(TimeSpan window)
+    /// <summary>窗口到期则取走累计（未到期返回空并保留累计）。</summary>
+    public (int Ok, int Fail, List<string> Failures) PopPulseWindow(TimeSpan window)
     {
-        if ((DateTime.Now - _pulseWindowAt) < window) return (0, 0);
+        if ((DateTime.Now - _pulseWindowAt) < window) return (0, 0, new List<string>());
         var ok = Interlocked.Exchange(ref _pulseOk, 0);
         var fail = Interlocked.Exchange(ref _pulseFail, 0);
         _pulseWindowAt = DateTime.Now;
-        return ok + fail == 0 ? (0, 0) : (ok, fail);
+        var fails = new List<string>();
+        while (_pulseFailures.TryDequeue(out var f)) fails.Add(f);
+        return ok + fail == 0 && fails.Count == 0 ? (0, 0, fails) : (ok, fail, fails);
     }
 
     public string Id => Row.Id;
@@ -272,8 +278,9 @@ public sealed class AccountRuntime
     private DateTime _lastSkipLog;
 
     /// <summary>对一台云电脑执行一次保活会话。claim=false 旁观者脉冲；claim=true 认领（挂机/打卡）。
-    /// 认领闸（_claimGate）仅约束认领会话——旁观者脉冲互不冲突，也不与认领争锁（3 并发闸已在调用侧限流）。</summary>
-    public async Task<bool> PulseSessionAsync(SmDesktop desk, bool claim, int holdSec, string reason)
+    /// 认领闸（_claimGate）仅约束认领会话——旁观者脉冲互不冲突，也不与认领争锁（3 并发闸已在调用侧限流）。
+    /// 返回 (是否成功, 失败原因)。</summary>
+    public async Task<(bool Ok, string Error)> PulseSessionAsync(SmDesktop desk, bool claim, int holdSec, string reason)
     {
         if (claim && !_claimGate.Wait(0))
         {
@@ -282,21 +289,21 @@ public sealed class AccountRuntime
                 _lastSkipLog = DateTime.Now;
                 Log("info", "[" + desk.Name + "] 存在进行中的认领会话，本次" + reason + "跳过（后续跳过日志静默）");
             }
-            return false;
+            return (false, "认领会话占用");
         }
         var hookOk = false;
         var hookErr = "";
         var startedAt = DateTime.Now;
         try
         {
-            if (!await EnsureLoginAsync()) { hookErr = "未登录"; return false; }
+            if (!await EnsureLoginAsync()) { hookErr = "未登录"; return (false, hookErr); }
             var (info, _) = await Api().GetConnectInfoAsync(desk.DesktopId);
             RefreshPersistedSession();
             if (info.ValueKind != JsonValueKind.Object)
             {
                 hookErr = "云电脑未就绪（可能开机中/已关机）";
                 Log("warning", "[" + desk.Name + "] " + hookErr + "，跳过");
-                return false;
+                return (false, hookErr);
             }
             var cfg = ClinkConfig.FromResponse(info);
             using var channel = new ClinkMain(cfg, Name, (lv, acc, msg) => _log.Write(lv, Name, acc, msg));
@@ -327,13 +334,13 @@ public sealed class AccountRuntime
             Log(claim ? "success" : "info",
                 "[" + desk.Name + "] " + reason + "会话结束 (保持 " + held + "s | 103握手=" + channel.HandshakeDone +
                 " 112认领=" + channel.ClaimSent + " 收 " + channel.BytesRecv / 1024.0 + "KB)");
-            return channel.HandshakeDone;
+            return (channel.HandshakeDone, hookOk ? "" : hookErr);
         }
         catch (Exception ex)
         {
             hookErr = ex.Message;
             Log("warning", "[" + desk.Name + "] " + reason + "异常: " + ex.Message);
-            return false;
+            return (false, ex.Message);
         }
         finally
         {
@@ -471,7 +478,7 @@ public sealed class AccountRuntime
         var desks = _db.DesktopsOf(Row.Id).Where(d => d.TaskEnabled).ToList();
         if (desks.Count == 0) return "名下无可用云电脑";
         var target = desks.FirstOrDefault(d => d.UseStatus == 25 || d.UseStatusText == "运行中") ?? desks[0];
-        var ok = await PulseSessionAsync(target, claim: true, holdSec: 25, reason: "打卡认领");
+        var (ok, _) = await PulseSessionAsync(target, claim: true, holdSec: 25, reason: "打卡认领");
         await Task.Delay(3000);
         await RefreshOfficialTasksAsync();
         return IsTaskDoneToday("sign") ? "打卡完成 (+100积分)"
@@ -493,7 +500,7 @@ public sealed class AccountRuntime
         try
         {
             Log("info", "[" + target.Name + "] 开始 1 小时挂机认领（时长任务）...");
-            var ok = await PulseSessionAsync(target, claim: true, holdSec: 3600, reason: "挂机");
+            var (ok, _) = await PulseSessionAsync(target, claim: true, holdSec: 3600, reason: "挂机");
             await RefreshOfficialTasksAsync();
             return ok && IsTaskDoneToday("hang") ? "挂机达成 (+100积分)" : ok ? "挂机会话结束，等待官方计时落账" : "挂机会话中断";
         }
@@ -803,8 +810,8 @@ public sealed class Engine
                                 }
                                 else
                                 {
-                                    var ok = await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
-                                    rt.CountPulse(ok);
+                                    var (ok, err) = await rt.PulseSessionAsync(desk, claim: false, holdSec: Math.Clamp(settings.KeepAliveSeconds, 15, 60), reason: "脉冲");
+                                    rt.CountPulse(ok, desk.Name, err);
                                 }
                             }
                         }
@@ -821,10 +828,15 @@ public sealed class Engine
         {
             if (!rt.Row.KeepaliveEnabled) continue;
             var window = TimeSpan.FromHours(6);
-            var (ok, fail) = rt.PopPulseWindow(window);
-            if (ok + fail == 0) continue;
+            var (ok, fail, failures) = rt.PopPulseWindow(window);
+            if (ok + fail == 0 && failures.Count == 0) continue;
             var body = $"保活脉冲: ✅ {ok} / ❌ {fail}（过去 6 小时）";
-            if (fail > 0) body += "\n失败桌面可在设备墙查看详情";
+            if (failures.Count > 0)
+            {
+                body += "\n" + string.Join("\n", failures.Take(5));
+                if (failures.Count > 5) body += $"\n…等共 {failures.Count} 条失败";
+            }
+            else if (fail > 0) body += "\n失败桌面可在设备墙查看详情";
             _ = Svc.NotifyHubField.SendAsync(rt.Row.Name, $"天翼云保活简报 - {rt.Row.Name}", body);
         }
 

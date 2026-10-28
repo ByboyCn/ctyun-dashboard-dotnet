@@ -28,6 +28,17 @@ async function loadAccount() {
 }
 const accName = computed(() => card.value?.name || card.value?.userMasked || `账号 ${accId.value}`)
 
+// 云类型标签（与仪表盘卡片一致）：天翼云（蓝）/ 移动云·爱家（绿）/ 移动云·公众（青）
+const cloudTag = computed(() => {
+  if (platform.value === 'ydpc') {
+    if (/ecloud/i.test(String(card.value?.platform || ''))) {
+      return { text: '移动云·公众', cls: 'cloud-ecloud' }
+    }
+    return { text: '移动云·爱家', cls: 'cloud-soho' }
+  }
+  return { text: '天翼云', cls: 'cloud-ctyun' }
+})
+
 // ===== 桌面列表 =====
 const PAGE_SIZE = 60
 const items = ref([])
@@ -414,6 +425,7 @@ function displayVal(v) {
     <div class="page-head">
       <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
         <el-button @click="router.push('/')">← 返回仪表盘</el-button>
+        <span class="cloud-tag" :class="cloudTag.cls">{{ cloudTag.text }}</span>
         <span style="font-size: 16px; font-weight: 600; color: var(--text-1)">{{ accName }}</span>
         <StatusBadge
           :status="card ? statusOf(card) : 'online'"

@@ -164,7 +164,16 @@ public static class EcloudDesktops
         {
             var d = desktops[i];
             var raw = statuses.GetValueOrDefault(d.InstanceId, "");
-            desktops[i] = d with { ResourceStatus = raw, PowerState = NormalizePowerState(raw) };
+            var norm = NormalizePowerState(raw);
+            if (norm == "unknown" && d.PowerOnEnable != null)
+            {
+                // resourceStatus 缺失/无法判定时，用平台操作层推断（machineOperateMap 比状态字段更贴近真实电源态）：
+                // 不可开机 + 提示"已开机" ⇒ on；可开机 ⇒ off（对齐 ydpc-keeplive 的 vmStatusShow 语义）
+                if (d.PowerOnEnable == false && d.PowerOnHint.Contains("已开机")) norm = "on";
+                else if (d.PowerOnEnable == false) norm = "on";
+                else if (d.PowerOnEnable == true) norm = "off";
+            }
+            desktops[i] = d with { ResourceStatus = raw, PowerState = norm };
         }
         return desktops;
     }

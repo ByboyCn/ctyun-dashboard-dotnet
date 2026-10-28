@@ -22,6 +22,17 @@ const status = computed(() => statusOf(props.card))
 const statusTip = computed(() => props.card.statusText || props.card.lastError || '')
 // 30060/30090 风控信号：服务端要求图形验证码重新登录
 const needCaptchaRelogin = computed(() => /需要图形验证码/.test(String(props.card?.statusText || '')))
+
+// 云类型标签：天翼云（蓝）/ 移动云·爱家（绿）/ 移动云·公众（青）
+const cloudTag = computed(() => {
+  if (props.platform === 'ydpc') {
+    if (/ecloud/i.test(String(props.card?.platform || ''))) {
+      return { text: '移动云·公众', cls: 'cloud-ecloud' }
+    }
+    return { text: '移动云·爱家', cls: 'cloud-soho' }
+  }
+  return { text: '天翼云', cls: 'cloud-ctyun' }
+})
 const desktops = computed(() => props.card.desktops || [])
 const tasks = computed(() => ({
   sign: taskOf(props.card, 'sign'),

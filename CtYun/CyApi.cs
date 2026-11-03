@@ -580,7 +580,7 @@ public class CyApi : IDisposable
                 foreach (var tf in textFields)
                 {
                     if (string.IsNullOrEmpty(tf)) continue;
-                    var m = System.Text.RegularExpressions.Regex.Match(tf, @"(\d+)C(\d+)G", RegexOptions.IgnoreCase);
+                    var m = System.Text.RegularExpressions.Regex.Match(tf, @"(\d+)C(\d+)G");
                     if (m.Success) { spec = m.Groups[1].Value + "核" + m.Groups[2].Value + "G"; break; }
                 }
             }

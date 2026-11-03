@@ -564,12 +564,36 @@ public class CyApi : IDisposable
             if (statusText == "") statusText = GetStr(it, "useStatus");
             if (statusText == "") statusText = "运行中";
             var useStatus = GetLong(it, "useStatus");
+            // 智能规格解析（对齐原版 parseDesktopSpec）：flavorName/desktopName 显式 4C8G 模式
+            // → cpu/memory 数值 → 官方套餐版本名映射（政企版/尊享/旗舰版等，数字字段常为 null）
             var spec = GetStr(it, "flavorName");
             if (spec == "") spec = GetStr(it, "specStr");
             if (spec == "")
             {
                 var cpu = GetLong(it, "cpu"); var mem = GetLong(it, "memory");
                 if (cpu > 0) spec = cpu + "核" + mem + "G";
+            }
+            if (spec == "")
+            {
+                // 显式 4C8G 模式（flavorName / desktopName / objName / prodGroupName 逐个找）
+                string?[] textFields = [GetStr(it, "flavorName"), GetStr(it, "desktopName"), GetStr(it, "objName"), GetStr(it, "prodGroupName")];
+                foreach (var tf in textFields)
+                {
+                    if (string.IsNullOrEmpty(tf)) continue;
+                    var m = System.Text.RegularExpressions.Regex.Match(tf, @"(\d+)C(\d+)G", RegexOptions.IgnoreCase);
+                    if (m.Success) { spec = m.Groups[1].Value + "核" + m.Groups[2].Value + "G"; break; }
+                }
+            }
+            if (spec == "")
+            {
+                // 套餐版本名映射（对齐原版 parseDesktopSpec 官方套餐表）
+                var prodName = GetStr(it, "prodGroupName");
+                if (prodName == "") prodName = GetStr(it, "skuName");
+                if (prodName.Contains("旗舰", StringComparison.Ordinal)) spec = "16核32G";
+                else if (prodName.Contains("尊享", StringComparison.Ordinal) || prodName.Contains("精英", StringComparison.Ordinal)) spec = "8核16G";
+                else if (prodName.Contains("政企", StringComparison.Ordinal)) spec = "8核16G";
+                else if (prodName.Contains("标准", StringComparison.Ordinal)) spec = "4核8G";
+                else if (prodName.Contains("大众", StringComparison.Ordinal)) spec = "2核4G";
             }
             merged[id] = new DesktopBrief(id, name, (int)useStatus, statusText, spec, it.GetRawText());
         }

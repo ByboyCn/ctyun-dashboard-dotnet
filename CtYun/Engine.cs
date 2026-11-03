@@ -779,7 +779,7 @@ public sealed class Engine
     }
 
     private static readonly string[] ExpiryKeys =
-        { "expireTime", "expireAt", "expireDate", "endTime", "serviceEndTime", "dueTime", "expireExtra" };
+        { "expireTime", "expireAt", "expireDate", "endTime", "serviceEndTime", "dueTime", "expireExtra", "bandExpireDate", "licenseExpireDate", "allowConnEndTime" };
 
     private void CheckExpiryAlerts()
     {

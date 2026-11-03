@@ -36,7 +36,8 @@ public sealed record EcloudDesktop(
     string ResourceStatus = "", // 服务端原始枚举（会滞后/失真，仅展示与排查）
     string PowerState = "unknown", // 归一三态：on / off / unknown
     bool? PowerOnEnable = null, // machineOperateMap.powerOn.operateEnable（平台操作层现算）
-    string PowerOnHint = "")
+    string PowerOnHint = "",
+    string ExtraExpireJson = "") // 列表节点里的到期类字段（expireTime/endTime 等，供到期预警）
 {
     public JsonObject ToRawJson() => new()
     {
@@ -49,6 +50,7 @@ public sealed record EcloudDesktop(
         ["powerState"] = PowerState,
         ["powerOnEnable"] = PowerOnEnable == null ? null : JsonValue.Create(PowerOnEnable.Value),
         ["powerOnHint"] = PowerOnHint,
+        ["expireExtra"] = string.IsNullOrEmpty(ExtraExpireJson) ? null : JsonNode.Parse(ExtraExpireJson),
     };
 }
 
@@ -109,6 +111,16 @@ public static class EcloudDesktops
                 if (pom["operateFailReason"] is JsonValue ofr && ofr.TryGetValue<string>(out var h)) powerOnHint = h;
             }
 
+            // 到期类字段捕获（expireTime/expireAt/endTime/serviceEndTime 等，供每日到期预警）
+            var expireExtra = new JsonObject();
+            foreach (var kv in m)
+            {
+                var k = kv.Key.ToLowerInvariant();
+                if ((k.Contains("expire") || k.Contains("endtime") || k.Contains("enddate") || k.Contains("duetime")) &&
+                    kv.Value is JsonValue vv && vv.TryGetValue<string>(out var tv) && tv != "")
+                    expireExtra[kv.Key] = tv;
+            }
+
             desktops.Add(new EcloudDesktop(
                 InstanceId: instanceId,
                 MachineId: machineId,
@@ -116,7 +128,8 @@ public static class EcloudDesktops
                 OriginCompanyCode: GetStr(m, "originCompanyCode"),
                 ResourcePoolUid: GetStr(m, "resourcePoolUid"),
                 PowerOnEnable: powerOnEnable,
-                PowerOnHint: powerOnHint));
+                PowerOnHint: powerOnHint,
+                ExtraExpireJson: expireExtra.ToJsonString()));
         }
         return desktops;
     }

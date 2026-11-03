@@ -708,6 +708,8 @@ public sealed class Engine
     private readonly ConcurrentDictionary<string, byte> _busy = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _pulseGates = new();   // 每账号脉冲并发闸（防 172 台齐发）
     private Timer? _timer;
+    private DateTime _lastExpiryAlertDate = DateTime.MinValue;   // 到期预警每日一次
+    private DateTime _lastExpiryScanAt = DateTime.MinValue;      // 扫描节流（10 分钟）
     public DateTime StartedAt { get; } = DateTime.Now;
 
     public Engine(Db db, LogHub log) { _db = db; _log = log; }
@@ -763,10 +765,92 @@ public sealed class Engine
         _timer ??= new Timer(_ => _ = TickAsync(), null, 5000, 5000);
     }
 
+    // ---------- 到期预警（订阅/套餐到期 <7 天 → 每日推送一次）----------
+    private static DateTime? ParseAnyDate(string? v)
+    {
+        if (string.IsNullOrWhiteSpace(v)) return null;
+        var s = v.Trim();
+        if (long.TryParse(s, out var ms) && s.Length >= 12)
+        {
+            try { return DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime; } catch { }
+        }
+        if (DateTime.TryParse(s, out var d)) return d;
+        return null;
+    }
+
+    private static readonly string[] ExpiryKeys =
+        { "expireTime", "expireAt", "expireDate", "endTime", "serviceEndTime", "dueTime", "expireExtra" };
+
+    private void CheckExpiryAlerts()
+    {
+        var today = DateTime.Now.Date;
+        if (_lastExpiryAlertDate == today) return;
+        if ((DateTime.Now - _lastExpiryScanAt).TotalMinutes < 10) return;   // 扫描节流
+        _lastExpiryScanAt = DateTime.Now;
+
+        var lines = new List<string>();
+        var scan = (string accName, string scope, string deskName, string raw) =>
+        {
+            if (string.IsNullOrEmpty(raw)) return;
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                DateTime? exp = null;
+                foreach (var k in ExpiryKeys)
+                {
+                    if (!doc.RootElement.TryGetProperty(k, out var v)) continue;
+                    if (k == "expireExtra" && v.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var ev in v.EnumerateObject())
+                        {
+                            var cand = ev.Value.ValueKind == JsonValueKind.String ? ev.Value.GetString()
+                                : (ev.Value.ValueKind == JsonValueKind.Number ? ev.Value.GetRawText() : null);
+                            var pd = ParseAnyDate(cand);
+                            if (pd != null && (exp == null || pd > exp)) exp = pd;
+                        }
+                        continue;
+                    }
+                    var s = v.ValueKind == JsonValueKind.String ? v.GetString()
+                        : (v.ValueKind == JsonValueKind.Number ? v.GetRawText() : null);
+                    var p = ParseAnyDate(s);
+                    if (p != null && (exp == null || p > exp)) exp = p;
+                }
+                if (exp == null) return;
+                var days = (exp.Value.Date - today).TotalDays;
+                if (days < 0 || days >= 7) return;
+                lines.Add($"❗[{scope}] {accName} / {deskName}：{exp.Value:yyyy-MM-dd} 到期（剩 {(int)days} 天）");
+            }
+            catch { }
+        };
+
+        foreach (var rt in _runtimes.Values)
+        {
+            List<SmDesktop> desks;
+            try { desks = _db.DesktopsOf(rt.Row.Id); } catch { continue; }
+            foreach (var d in desks)
+                scan(rt.Row.Name, "天翼云", d.Name, d.RawJson);
+        }
+        foreach (var rt in _ydpc.Values)
+        {
+            List<SmDesktop> desks;
+            try { desks = _db.DesktopsOf(rt.Row.Id); } catch { continue; }
+            foreach (var d in desks)
+                scan(rt.Row.Name, "移动云", d.Name, d.RawJson);
+        }
+
+        if (lines.Count == 0) { _lastExpiryAlertDate = today; return; }
+        var body = "以下桌面订阅/套餐即将到期（7 天内）：\n" + string.Join("\n", lines);
+        _ = Svc.NotifyHubField.SendAsync("到期预警", "⚠️ 到期预警 - CtyunDashboard", body);
+        _lastExpiryAlertDate = today;
+        _log.Write("warning", "Engine", "到期预警", "已推送: " + lines.Count + " 台 7 天内到期");
+    }
+
     private async Task TickAsync()
     {
         var settings = _db.GetSettings();
         var now = DateTime.Now;
+
+        CheckExpiryAlerts();   // 到期预警（每桌面订阅到期 <7 天 → 每日一次）
 
         // 会话主动续期：每 12 小时无感轮转一次 token，杜绝会话自然过期
         foreach (var rt in _runtimes.Values)

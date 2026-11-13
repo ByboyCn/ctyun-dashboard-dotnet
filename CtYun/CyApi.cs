@@ -586,14 +586,10 @@ public class CyApi : IDisposable
             }
             if (spec == "")
             {
-                // 套餐版本名映射（对齐原版 parseDesktopSpec 官方套餐表）
+                // 列表接口对部分桌面（如 AI 云电脑）不下发任何硬件字段——
+                // 诚实展示套餐组名，不猜硬件规格（对齐原版诚实性红线：未知绝不冒充已知）
                 var prodName = GetStr(it, "prodGroupName");
-                if (prodName == "") prodName = GetStr(it, "skuName");
-                if (prodName.Contains("旗舰", StringComparison.Ordinal)) spec = "16核32G";
-                else if (prodName.Contains("尊享", StringComparison.Ordinal) || prodName.Contains("精英", StringComparison.Ordinal)) spec = "8核16G";
-                else if (prodName.Contains("政企", StringComparison.Ordinal)) spec = "8核16G";
-                else if (prodName.Contains("标准", StringComparison.Ordinal)) spec = "4核8G";
-                else if (prodName.Contains("大众", StringComparison.Ordinal)) spec = "2核4G";
+                if (prodName != "") spec = prodName;
             }
             merged[id] = new DesktopBrief(id, name, (int)useStatus, statusText, spec, it.GetRawText());
         }

@@ -300,7 +300,7 @@ public sealed class AccountRuntime
             {
                 Log("warning", $"[{d.Name}] 单台详情补齐失败（下次同步重试）: {ex.Message}");
             }
-            if (candidates.Count > 1) await Task.Delay(300);
+            if (candidates.Count > 1) await Task.Delay(80);   // 国内直连：API 延迟低，80ms 限速足够
         }
 
         RefreshPersistedSession();
@@ -917,7 +917,7 @@ public sealed class Engine
                 if ((now - last).TotalSeconds < interval) continue;
                 var key = rt.Row.Id + ":" + desk.DesktopId;
                 if (!_busy.TryAdd(key, 0)) continue;
-                var gate = _pulseGates.GetOrAdd(rt.Row.Id, _ => new SemaphoreSlim(3, 3));   // 每账号最多 3 路并发脉冲（172 台齐发会把连接打爆）
+                var gate = _pulseGates.GetOrAdd(rt.Row.Id, _ => new SemaphoreSlim(8, 8));   // 每账号最多 8 路并发脉冲（国内直连延迟低，可放宽）
                 _ = Task.Run(async () =>
                 {
                     try

@@ -546,7 +546,35 @@ public class CyApi : IDisposable
     }
 
     // ---------- 桌面 ----------
-    public sealed record DesktopBrief(string Id, string Name, int UseStatus, string UseStatusText, string Spec, string RawJson);
+    /// <summary>SpecMissing=true 表示列表接口未下发硬件字段，Spec 当前是套餐组名兜底（如「政企版」）。</summary>
+    public sealed record DesktopBrief(string Id, string Name, int UseStatus, string UseStatusText, string Spec, string RawJson, bool SpecMissing = false);
+
+    /// <summary>
+    /// 硬件规格解析（对齐原版 parseDesktopSpec）：flavorName/specStr → 显式 cpu/memory 数值 →
+    /// 文本 4C8G 模式（flavorName/desktopName/objName/prodGroupName）。命中返回规格串，未命中返回 null。
+    /// </summary>
+    internal static string? ParseHardwareSpec(JsonElement it)
+    {
+        var spec = GetStr(it, "flavorName");
+        if (spec == "") spec = GetStr(it, "specStr");
+        if (spec == "")
+        {
+            var cpu = GetLong(it, "cpu");
+            var mem = GetLong(it, "memory");
+            if (cpu > 0) spec = cpu + "核" + mem + "G";
+        }
+        if (spec == "")
+        {
+            string?[] textFields = [GetStr(it, "flavorName"), GetStr(it, "desktopName"), GetStr(it, "objName"), GetStr(it, "prodGroupName")];
+            foreach (var tf in textFields)
+            {
+                if (string.IsNullOrEmpty(tf)) continue;
+                var m = System.Text.RegularExpressions.Regex.Match(tf, @"(\d+)C(\d+)G");
+                if (m.Success) return m.Groups[1].Value + "核" + m.Groups[2].Value + "G";
+            }
+        }
+        return string.IsNullOrEmpty(spec) ? null : spec;
+    }
 
     private static void CollectDesks(JsonElement data, Dictionary<string, DesktopBrief> merged)
     {
@@ -564,34 +592,11 @@ public class CyApi : IDisposable
             if (statusText == "") statusText = GetStr(it, "useStatus");
             if (statusText == "") statusText = "运行中";
             var useStatus = GetLong(it, "useStatus");
-            // 智能规格解析（对齐原版 parseDesktopSpec）：flavorName/desktopName 显式 4C8G 模式
-            // → cpu/memory 数值 → 官方套餐版本名映射（政企版/尊享/旗舰版等，数字字段常为 null）
-            var spec = GetStr(it, "flavorName");
-            if (spec == "") spec = GetStr(it, "specStr");
-            if (spec == "")
-            {
-                var cpu = GetLong(it, "cpu"); var mem = GetLong(it, "memory");
-                if (cpu > 0) spec = cpu + "核" + mem + "G";
-            }
-            if (spec == "")
-            {
-                // 显式 4C8G 模式（flavorName / desktopName / objName / prodGroupName 逐个找）
-                string?[] textFields = [GetStr(it, "flavorName"), GetStr(it, "desktopName"), GetStr(it, "objName"), GetStr(it, "prodGroupName")];
-                foreach (var tf in textFields)
-                {
-                    if (string.IsNullOrEmpty(tf)) continue;
-                    var m = System.Text.RegularExpressions.Regex.Match(tf, @"(\d+)C(\d+)G");
-                    if (m.Success) { spec = m.Groups[1].Value + "核" + m.Groups[2].Value + "G"; break; }
-                }
-            }
-            if (spec == "")
-            {
-                // 列表接口对部分桌面（如 AI 云电脑）不下发任何硬件字段——
-                // 诚实展示套餐组名，不猜硬件规格（对齐原版诚实性红线：未知绝不冒充已知）
-                var prodName = GetStr(it, "prodGroupName");
-                if (prodName != "") spec = prodName;
-            }
-            merged[id] = new DesktopBrief(id, name, (int)useStatus, statusText, spec, it.GetRawText());
+            // 智能规格解析（对齐原版 parseDesktopSpec）；全部未命中 → 套餐组名兜底并标记 SpecMissing
+            // （列表接口对部分桌面如 AI 云电脑不下发任何硬件字段——诚实展示套餐组名，不猜硬件规格）
+            var real = ParseHardwareSpec(it);
+            var spec = real ?? GetStr(it, "prodGroupName");
+            merged[id] = new DesktopBrief(id, name, (int)useStatus, statusText, spec, it.GetRawText(), SpecMissing: real == null);
         }
 
         switch (data.ValueKind)
@@ -617,9 +622,14 @@ public class CyApi : IDisposable
         var page = await ApiAsync("POST", "api/desktop/client/pageDesktop",
             jsonBody: "{\"getCnt\":50,\"desktopTypes\":[\"1\",\"2001\",\"2002\",\"2003\"],\"sortType\":\"createTimeV1\"}");
         if (page.Code == 0) CollectDesks(page.Data, merged);
+        else _log("warning", _account, $"pageDesktop 失败 code={page.Code} {page.Msg}");
 
         var all = await ApiAsync("GET", "api/desktop/client/list");
         if (all.Code == 0) CollectDesks(all.Data, merged);
+        else _log("warning", _account, $"desktop/list 失败 code={all.Code} {all.Msg}");
+
+        if (merged.Count == 0)
+            _log("warning", _account, "桌面列表两个接口均未返回数据（共 0 台）");
 
         return [.. merged.Values];
     }
@@ -646,6 +656,27 @@ public class CyApi : IDisposable
             return (default, conn.Raw);  // 关机中 goingRetry
         }
         throw new Exception("获取连接配置失败: " + conn.Code + " " + conn.Msg);
+    }
+
+    /// <summary>
+    /// 按 desktopId 查询单台桌面详情（官方 status 端点，即 connectApiUrl.statusPath；
+    /// 只读查询，不触发连接。响应 data.desktopInfo 为单台详情对象，部分桌面比列表项下发更多字段）。
+    /// 查询失败/无 desktopInfo 返回 (default, "")。
+    /// </summary>
+    public async Task<(JsonElement DesktopInfo, string Raw)> GetDesktopDetailAsync(string desktopId)
+    {
+        try
+        {
+            var st = await ApiAsync("GET", $"api/desktop/client/status?desktopId={Uri.EscapeDataString(desktopId)}&specifiedCertCategory=1");
+            if (st.Code == 0 && st.Data.ValueKind == JsonValueKind.Object && st.Data.TryGetProperty("desktopInfo", out var di)
+                && di.ValueKind == JsonValueKind.Object)
+                return (di.Clone(), st.Raw);
+        }
+        catch
+        {
+            // 详情查询失败不阻断同步：调用方按"未补齐"继续
+        }
+        return (default, "");
     }
 
     public async Task<ApiResult> OperateAsync(string desktopId, int operationType)

@@ -264,6 +264,39 @@ public sealed class AccountRuntime
     {
         await EnsureLoginAsync();
         var list = await Api().GetAllDesktopsAsync();
+
+        // 单台详情补齐：列表接口对部分桌面（AI 型等）不下发硬件字段（cpuCore/memoryGB/flavorName 全 null，
+        // 只给套餐组名）→ 对这些桌面逐台调官方 status 详情接口（只读，不触发连接）补真实规格。
+        // 仅对缺失者调用、串行 + 300ms 间隔控制 QPS；详情也未下发硬件时保留套餐组名（诚实性红线：绝不猜）。
+        var missing = list.Where(d => d.SpecMissing).ToList();
+        Log("info", $"规格补齐扫描: 全部 {list.Count} 台，其中 {missing.Count} 台未下发硬件字段");
+        foreach (var d in missing)
+        {
+            try
+            {
+                var (info, raw) = await Api().GetDesktopDetailAsync(d.Id);
+                if (info.ValueKind != JsonValueKind.Object)
+                {
+                    Log("info", $"[{d.Name}] 单台详情接口未返回 desktopInfo（该品类可能不支持 status 查询），保留套餐组名");
+                    continue;
+                }
+                var real = CyApi.ParseHardwareSpec(info);
+                if (string.IsNullOrEmpty(real))
+                {
+                    Log("info", $"[{d.Name}] 单台详情已获取（字段 {info.EnumerateObject().Count()} 个）但仍未下发硬件字段，保留套餐组名");
+                    continue;
+                }
+                list.Remove(d);
+                list.Add(d with { Spec = real, RawJson = raw, SpecMissing = false });
+                Log("info", $"[{d.Name}] 已按单台详情补齐真实规格: {real}");
+            }
+            catch (Exception ex)
+            {
+                Log("warning", $"[{d.Name}] 单台详情补齐失败: {ex.Message}");
+            }
+            if (missing.Count > 1) await Task.Delay(300);
+        }
+
         RefreshPersistedSession();
         _db.SyncDesktops(Row, list.Select(d => (d.Id, d.Name, d.UseStatus, d.UseStatusText, d.Spec, d.RawJson)).ToList());
         return _db.DesktopsOf(Row.Id);

@@ -417,6 +417,13 @@ function displayVal(v) {
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }
+
+/** 官方是否下发了硬件字段（cpuCore/memoryGB/flavorName 等任一非空）——全空时详情面板标注以官方客户端为准 */
+function hasHardwareInfo(d) {
+  const raw = parseRaw(d)
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+  return !!(raw.cpuCore || raw.memoryGB || raw.flavorName || raw.cpu || raw.memory || raw.specStr)
+}
 </script>
 
 <template>
@@ -569,6 +576,9 @@ function displayVal(v) {
 
         <!-- raw_json 全量键值（展开时才解析） -->
         <div v-if="d.rawJson && isDetailOpen(d)" class="dt-raw">
+          <div v-if="!hasHardwareInfo(d)" class="form-hint" style="margin-bottom: 6px">
+            ⚠ 官方未下发硬件字段（cpu/memory/flavor 均为空），规格以官方客户端为准
+          </div>
           <template v-if="rawEntries(d)">
             <div v-for="[k, v] in rawEntries(d)" :key="k" class="dt-raw-row">
               <span class="dt-raw-key">

@@ -27,6 +27,8 @@ public sealed class AccountRuntime
     private int _pulseOk, _pulseFail;
     private DateTime _pulseWindowAt = DateTime.Now;
     private readonly ConcurrentQueue<string> _pulseFailures = new();
+    // 已确认「详情不下发硬件」的桌面（每台只查一次，不再重试）
+    private readonly HashSet<string> _specNoHardware = new();
 
     /// <summary>脉冲完成后累计到当前聚合窗口（失败时附桌面名与原因，随窗口简报推送）。</summary>
     public void CountPulse(bool ok, string deskName, string error)
@@ -268,33 +270,37 @@ public sealed class AccountRuntime
         // 单台详情补齐：列表接口对部分桌面（AI 型等）不下发硬件字段（cpuCore/memoryGB/flavorName 全 null，
         // 只给套餐组名）→ 对这些桌面逐台调官方 status 详情接口（只读，不触发连接）补真实规格。
         // 仅对缺失者调用、串行 + 300ms 间隔控制 QPS；详情也未下发硬件时保留套餐组名（诚实性红线：绝不猜）。
-        var missing = list.Where(d => d.SpecMissing).ToList();
-        Log("info", $"规格补齐扫描: 全部 {list.Count} 台，其中 {missing.Count} 台未下发硬件字段");
-        foreach (var d in missing)
+        // 记忆化：已确认详情不下发硬件的桌面**只查一次**（避免每轮刷屏 + 重复 API 调用）。
+        var candidates = list.Where(d => d.SpecMissing && !_specNoHardware.Contains(d.Id)).ToList();
+        if (candidates.Count > 0)
+            Log("info", $"规格补齐扫描: 全部 {list.Count} 台，其中 {candidates.Count} 台尝试单台详情补齐");
+        foreach (var d in candidates)
         {
             try
             {
                 var (info, raw) = await Api().GetDesktopDetailAsync(d.Id);
                 if (info.ValueKind != JsonValueKind.Object)
                 {
-                    Log("info", $"[{d.Name}] 单台详情接口未返回 desktopInfo（该品类可能不支持 status 查询），保留套餐组名");
+                    _specNoHardware.Add(d.Id);
+                    Log("info", $"[{d.Name}] 详情接口未返回 desktopInfo（该品类不支持 status 查询），记录后不再重试，保留套餐组名");
                     continue;
                 }
                 var real = CyApi.ParseHardwareSpec(info);
                 if (string.IsNullOrEmpty(real))
                 {
-                    Log("info", $"[{d.Name}] 单台详情已获取（字段 {info.EnumerateObject().Count()} 个）但仍未下发硬件字段，保留套餐组名");
+                    _specNoHardware.Add(d.Id);
+                    Log("info", $"[{d.Name}] 单台详情已获取但仍未下发硬件字段，记录后不再重试，保留套餐组名");
                     continue;
                 }
                 list.Remove(d);
                 list.Add(d with { Spec = real, RawJson = raw, SpecMissing = false });
-                Log("info", $"[{d.Name}] 已按单台详情补齐真实规格: {real}");
+                Log("success", $"[{d.Name}] 已按单台详情补齐真实规格: {real}");
             }
             catch (Exception ex)
             {
-                Log("warning", $"[{d.Name}] 单台详情补齐失败: {ex.Message}");
+                Log("warning", $"[{d.Name}] 单台详情补齐失败（下次同步重试）: {ex.Message}");
             }
-            if (missing.Count > 1) await Task.Delay(300);
+            if (candidates.Count > 1) await Task.Delay(300);
         }
 
         RefreshPersistedSession();

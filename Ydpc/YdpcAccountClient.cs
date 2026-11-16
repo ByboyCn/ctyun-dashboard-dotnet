@@ -57,8 +57,9 @@ public static class YdpcErrors
 {
     // tokenRetry：/1000100/、\b4001\b、\b4003\b、未登录、未授权、鉴权失败、登录失效、已失效、
     //             会话、重新登录、unauthorized(i)、\b401\b、token(i)、accessToken(i)
+    //             + auth_taxonomy.INVALID_TOKEN_CODES {4014,4015,4016,4017,4200,4201}（ydpc-keeplive 对照补全）
     private static readonly string[] TokenRetryPlain = { "1000100", "未登录", "未授权", "鉴权失败", "登录失效", "已失效", "会话", "重新登录" };
-    private static readonly string[] TokenRetryWords = { "4001", "4003", "401" };
+    private static readonly string[] TokenRetryWords = { "4001", "4003", "401", "4014", "4015", "4016", "4017", "4200", "4201" };
     private static readonly string[] TokenRetryIc = { "unauthorized", "token" };
 
     // hard：CERT_(i)、UNABLE_TO_VERIFY(i)、self[-_ ]?signed(i)、证书、ENOTFOUND(i)、EAI_AGAIN(i)、

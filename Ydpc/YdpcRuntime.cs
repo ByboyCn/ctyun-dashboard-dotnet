@@ -153,36 +153,134 @@ public sealed class YdpcAccountRuntime
             // 列表失败不阻断：凭旧 Vms 继续心跳（JS 版 refreshVms 失败也是回落 account.vms）
             Log("warning", $"刷新云电脑列表异常: {e.Message}");
         }
-        var usid = soho.DefaultUserServiceId;
-        if (usid == null)
+        var vms = soho.Vms;
+        if (vms.Count == 0)
         {
             Log("info", "名下暂无云电脑，本轮保活跳过");
             return;
         }
-        var r = await soho.KeepaliveOnceAsync(usid, 3, ct).ConfigureAwait(false);
-        if (r.Success)
+
+        // 【对照补全】keepalive_account/keepalive_single_vm：对账号下**所有**开启保活的云电脑
+        // 逐台保活（此前只保活第一台）；关机 VM 自动开机（ZTE=CSAP 官方材料链，SC=SCG 轮内触发）。
+        var desks = Svc.Db.DesktopsOf(Row.Id);
+        bool anySuccess = false, anyHard = false;
+        string firstSoft = "", firstHard = "";
+        foreach (var vm in vms)
         {
-            Row.LastError = null;
-            Row.LastLoginAt = Db.Now();
+            ct.ThrowIfCancellationRequested();
+            var usid = vm.UserServiceId.ToString(CultureInfo.InvariantCulture);
+            var desk = desks.FirstOrDefault(d => d.DesktopId == usid);
+            if (desk != null && !desk.KeepaliveEnabled) continue; // 单机保活开关
+
+            // 关机自动开机（母本 keepalive_single_vm 的 auto_boot 分支）
+            if (AutoBoot && YdpcAccountClient.IsVmOff(vm))
+            {
+                var vmStatusNum = long.TryParse(vm.VmStatusCode, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sc0) ? sc0 : -1;
+                if (vmStatusNum == 0 && string.IsNullOrEmpty(vm.VmStatus))
+                {
+                    Log("info", $"[{vm.VmName}] vmStatus=0 从未开机，需先用官方客户端连接一次，跳过");
+                    continue;
+                }
+                if (IsScg)
+                {
+                    Log("info", $"[{vm.VmName}] SC 云电脑关机（SCG 轮内 getConnectInfo 会触发开机），继续本轮");
+                }
+                else
+                {
+                    Log("info", $"[{vm.VmName}] VM 处于关机状态（{vm.VmStatus}），尝试自动开机…");
+                    var booted = await AutoBootZteAsync(usid, ct).ConfigureAwait(false);
+                    if (!booted)
+                    {
+                        Log("error", $"[{vm.VmName}] 自动开机失败，本轮该机跳过保活");
+                        anyHard = true;
+                        firstHard ??= $"[{vm.VmName}] 自动开机失败";
+                        continue;
+                    }
+                    Log("success", $"[{vm.VmName}] 自动开机成功");
+                }
+            }
+
+            var r = await soho.KeepaliveOnceAsync(usid, 3, ct).ConfigureAwait(false);
+            if (r.Success)
+            {
+                anySuccess = true;
+                Row.LastError = null;
+                Row.LastLoginAt = Db.Now();
+                Svc.Db.UpdateAccount(Row);
+                Svc.Db.TouchPulse(Row.Id, usid);
+            }
+            else if (r.Skipped)
+            {
+                Log("info", $"[{vm.VmName}] 保活跳过: {r.Message}");
+            }
+            else if (r.TripBreaker)
+            {
+                anyHard = true;
+                firstHard ??= r.FailureText != "" ? r.FailureText : r.Message;
+                Log("error", $"[{vm.VmName}] 保活硬失败: {firstHard}");
+            }
+            else
+            {
+                Log("warning", $"[{vm.VmName}] 保活软失败(不熔断): {r.FailureText}");
+                firstSoft ??= r.FailureText != "" ? r.FailureText : r.Message;
+            }
+        }
+
+        // 轮级汇总通知（避免多台刷屏）
+        if (anySuccess)
+        {
+            Row.LastError = anyHard ? Row.LastError : null;
             Svc.Db.UpdateAccount(Row);
             _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活完成 - {Row.Name}",
-                $"SOHO 心跳 ✓（ZTE 通道）\n下次保活: {Math.Clamp(Row.PulseIntervalSeconds, 60, 604800) / 3600.0:0.#} 小时后");
+                $"SOHO 心跳 ✓（{(IsScg ? "SCG 通道" : "ZTE 通道")}）\n下次保活: {Math.Clamp(Row.PulseIntervalSeconds, 60, 604800) / 3600.0:0.#} 小时后");
         }
-        else if (r.Skipped)
+        if (anyHard)
         {
-            Log("info", $"保活轮跳过: {r.Message}");
-        }
-        else if (r.TripBreaker)
-        {
-            Row.LastError = r.FailureText != "" ? r.FailureText : r.Message;
+            Row.LastError = firstHard;
             Svc.Db.UpdateAccount(Row);
-            Log("error", $"保活轮硬失败: {Row.LastError}");
-            _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活失败 - {Row.Name}", Row.LastError);
+            _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活失败 - {Row.Name}", firstHard);
         }
-        else
+        else if (firstSoft != "")
         {
-            Log("warning", $"保活轮软失败(不熔断): {r.FailureText}");
-            _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活异常 - {Row.Name}", r.FailureText != "" ? r.FailureText : r.Message);
+            Log("warning", $"本轮含软失败(不熔断): {firstSoft}");
+            _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活异常 - {Row.Name}", firstSoft);
+        }
+    }
+
+    /// <summary>是否允许关机自动开机（Engine/路由可关）。</summary>
+    public bool AutoBoot { get; set; } = true;
+
+    /// <summary>
+    /// ZTE 关机自动开机（对齐 boot_vm 的 ZTE 分支）：优先 CSAP 官方材料链
+    /// （cs_startDesktop，keepalive_core._csap_start_desktop），失败回退 /cc/activate/v1。
+    /// </summary>
+    private async Task<bool> AutoBootZteAsync(string usid, CancellationToken ct)
+    {
+        try
+        {
+            var firmJson = await Soho().Soho.GetFirmAuthAsync(usid, ct).ConfigureAwait(false);
+            var firm = CagFirmAuth.FromJson(firmJson);
+            var (ok, msg) = await CsapBoot.BootAsync(firm, 30, ct).ConfigureAwait(false);
+            if (ok)
+            {
+                Log("success", $"[{usid}] CSAP 开机成功: {msg}");
+                return true;
+            }
+            Log("warning", $"[{usid}] CSAP 开机失败: {msg}，回退 /cc/activate/v1");
+        }
+        catch (Exception e)
+        {
+            Log("warning", $"[{usid}] CSAP 开机异常: {e.Message}，回退 /cc/activate/v1");
+        }
+        try
+        {
+            var res = await Soho().Soho.BootAsync(usid, ct).ConfigureAwait(false);
+            return res.Success;
+        }
+        catch (Exception e)
+        {
+            Log("warning", $"[{usid}] /cc/activate 回退开机也失败: {e.Message}");
+            return false;
         }
     }
 

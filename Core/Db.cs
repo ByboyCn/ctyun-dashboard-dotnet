@@ -323,6 +323,10 @@ public sealed class Db
                 UpdateDesktop(exist);
             }
         }
+        // 官方列表已不存在的桌面 → 清理残留行（防止陈旧桌面每轮报"用户无此桌面"）
+        var keep = list.Select(d => d.id).ToHashSet();
+        foreach (var d in old.Where(d => !keep.Contains(d.DesktopId)))
+            Exec("DELETE FROM desktop WHERE AccountId=@p0 AND DesktopId=@p1", account.Id, d.DesktopId);
     }
 
     public List<SmDesktop> DesktopsOf(string accountId)

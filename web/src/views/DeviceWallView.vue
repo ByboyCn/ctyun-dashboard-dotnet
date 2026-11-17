@@ -378,6 +378,21 @@ const RAW_KEY_LABELS = {
 const rawCache = new Map() // desktopId -> { src, parsed }
 const expandedIds = ref([])
 
+/** 安全解析 rawJson（带缓存）；失败返回 undefined */
+function parseRaw(d) {
+  if (!d.rawJson) return undefined
+  const hit = rawCache.get(d.desktopId)
+  if (hit && hit.src === d.rawJson) return hit.parsed
+  let parsed
+  try {
+    parsed = JSON.parse(d.rawJson)
+  } catch {
+    parsed = undefined
+  }
+  rawCache.set(d.desktopId, { src: d.rawJson, parsed })
+  return parsed
+}
+
 function isDetailOpen(d) {
   return expandedIds.value.includes(d.desktopId)
 }
@@ -392,18 +407,7 @@ function toggleDetail(d) {
 /** 返回 [key, value][]；解析失败返回 null（列表渲染期不调用，展开时才 parse） */
 function rawEntries(d) {
   if (!d.rawJson) return []
-  const hit = rawCache.get(d.desktopId)
-  let parsed
-  if (hit && hit.src === d.rawJson) {
-    parsed = hit.parsed
-  } else {
-    try {
-      parsed = JSON.parse(d.rawJson)
-    } catch {
-      parsed = undefined
-    }
-    rawCache.set(d.desktopId, { src: d.rawJson, parsed })
-  }
+  const parsed = parseRaw(d)
   if (parsed === undefined) return null
   if (parsed === null) return [['(根值)', 'null']]
   if (Array.isArray(parsed)) return parsed.map((v, i) => [String(i), v])

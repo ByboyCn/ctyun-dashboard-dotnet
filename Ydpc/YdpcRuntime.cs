@@ -768,6 +768,34 @@ public sealed class YdpcAccountRuntime
             {
                 // 已知未解研究项：ECLOUD 连接材料端点未破解——只落日志，不推渠道（避免每轮刷屏）
                 Log("warning", $"[{desk.Name}] ECLOUD 连接材料获取失败（研究项，不影响 L1/L2 保活）: {conn.Error}");
+                // HTTP-only 会话信号组：不依赖连接材料独立发送（pfm-mng 纯 HTTP 可能单独产生连接记录）
+                try
+                {
+                    var cid = Guid.NewGuid().ToString();
+                    if (EcloudHttp().AccessToken != null)
+                    {
+                        var (mcOk, mcCode, mcMsg) = await EcloudZteSecurity.MachineConnectAsync(
+                            EcloudHttp(), "", EcloudHttp().AccessToken!,
+                            machineId, desk.Name, "success",
+                            cid, _state.LoginUid, ct).ConfigureAwait(false);
+                        Log(mcOk ? "success" : "info", $"[{desk.Name}] machineConnect(空ticket): {mcMsg}");
+                    }
+                    var (usOk, usMsg) = await EcloudZteSecurity.UpdateSessionStatusAsync(
+                        EcloudHttp(), _state.LoginUid, 1,
+                        new List<(string, bool, string, string)> { (cid, true, machineId, "ECloud") }, ct).ConfigureAwait(false);
+                    Log(usOk ? "success" : "info", $"[{desk.Name}] {usMsg}");
+                    var accessToken = _state.AccessToken != "" ? _state.AccessToken : EcloudHttp().AccessToken ?? "";
+                    var userId = "";
+                    var c1 = accessToken.IndexOf(':');
+                    if (c1 >= 0) { var c2 = accessToken.IndexOf(':', c1 + 1); if (c2 > c1) userId = accessToken[(c1 + 1)..c2]; }
+                    if (userId == "") userId = Row.User;
+                    await EcloudZteSecurity.PushPfmReportAsync(
+                        EcloudHttp(), accessToken, userId, _state.DeviceUid, _state.LoginUid,
+                        machineId, cid, ct).ConfigureAwait(false);
+                    Log("info", $"[{desk.Name}] HTTP 会话信号组已发送（machineConnect+connectList+pfm）");
+                    Svc.Db.TouchPulse(Row.Id, desk.DesktopId);
+                }
+                catch (Exception sigEx) { Log("info", $"[{desk.Name}] HTTP 会话信号组异常: {sigEx.Message}"); }
                 continue;
             }
             Log("info", $"[{desk.Name}] 连接材料已获取 (source={conn.Source} inner={conn.Inner!.Host}:{conn.Inner.Port} vmId={conn.Inner.VmId[..Math.Min(12, conn.Inner.VmId.Length)]}… dataKeys={conn.DataKeys})");

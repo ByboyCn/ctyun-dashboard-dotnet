@@ -150,6 +150,12 @@ public static class EcloudDesktops
         }, ct: ct).ConfigureAwait(false);
 
         var statusList = resp["machineStatusList"] as JsonArray ?? new JsonArray();
+        // 一次性诊断：machineStatusList[0] 全量字段（machineOperateMap 可能含连接操作定义/ticket）
+        if (LastMachineStatusDump == null && statusList.Count > 0 && statusList[0] is JsonObject first)
+        {
+            var dump = first.ToJsonString();
+            LastMachineStatusDump = dump.Length > 2000 ? dump[..2000] : dump;
+        }
         foreach (var node in statusList)
         {
             if (node is not JsonObject s) continue;
@@ -159,6 +165,10 @@ public static class EcloudDesktops
         }
         return result;
     }
+
+    /// <summary>getDesktopStatus 首条 machineStatusList 的全量 dump（诊断用，读后由调用方清空）。</summary>
+    public static string? LastMachineStatusDump { get; private set; }
+    public static void ClearMachineStatusDump() => LastMachineStatusDump = null;
 
     /// <summary>列表 + 状态合并（侧车 op_desktop_list 的输出形态；状态查询失败整批回落 unknown 不抛错）。</summary>
     public static async Task<List<EcloudDesktop>> GetDesktopsWithStatusAsync(EcloudHttpUtil http, CancellationToken ct = default)

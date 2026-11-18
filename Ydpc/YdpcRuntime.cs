@@ -682,6 +682,13 @@ public sealed class YdpcAccountRuntime
         {
             Row.LastError = null;
             Log("success", "L1 账号态探针通过（HTTP 层探针 ≠ 云电脑不会被关机）");
+            // 一次性诊断：machineStatusList 全量字段（machineOperateMap 可能含连接操作定义/ticket）
+            var dump = EcloudDesktops.LastMachineStatusDump;
+            if (dump != null)
+            {
+                Log("info", $"[诊断] machineStatusList[0]: {dump}");
+                EcloudDesktops.ClearMachineStatusDump();
+            }
         }
         else if (outcome.Ok == false)
         {

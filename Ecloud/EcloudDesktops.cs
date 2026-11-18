@@ -155,6 +155,7 @@ public static class EcloudDesktops
         {
             var dump = first.ToJsonString();
             LastMachineStatusDump = dump.Length > 2000 ? dump[..2000] : dump;
+            Console.WriteLine("[DIAG] machineStatusList[0] captured: " + LastMachineStatusDump);
         }
         foreach (var node in statusList)
         {

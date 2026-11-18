@@ -28,6 +28,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CtyunDashboard.Ydpc;
 
@@ -98,7 +99,121 @@ public static class EcloudZteSecurity
         return Encoding.UTF8.GetString(plain);
     }
 
-    /// <summary>cs_connectDesktop password：RSA-PKCS1v1.5(rsapub "N=hex E=hex") → HEX 大写 → base64（rsa_pkcs1_v15_encrypt）。</summary>
+    /// <summary>
+    /// machineConnect 注册（bundle nVe 函数对齐）：连接时 + 周期性调用。
+    /// ticket = SPICE 握手票据（无真连接时传空串 —— 端点仍存在，参数缺失报 9999100 ≠ 404）。
+    /// 成功返回 errorCode "200"（bundle $X 重试逻辑的判定条件）。
+    /// </summary>
+    public static async Task<(bool Ok, string ErrorCode, string Message)> MachineConnectAsync(
+        EcloudHttpUtil http, string ticket, string accessToken,
+        string machineId, string machineName, string status,
+        string clientConnectId, string clientLoginUid, CancellationToken ct = default)
+    {
+        var body = new JsonObject
+        {
+            ["ticket"] = ticket,
+            ["accessToken"] = accessToken,
+            ["machineId"] = machineId,
+            ["machineName"] = machineName,
+            ["status"] = status,
+            ["flag"] = true,
+            ["errorCode"] = "",
+            ["errorMsg"] = "",
+            ["clientConnectId"] = clientConnectId,
+            ["clientLoginUid"] = clientLoginUid,
+            ["sessionId"] = clientConnectId,
+        };
+        var resp = await http.PostAsync("/session/machineConnect", body, ct: ct).ConfigureAwait(false);
+        string errCode = "";
+        if (resp["data"] is JsonObject d && d["errorCode"] is JsonValue ev)
+            errCode = ev.ToJsonString().Trim('"');
+        else if (resp["errorCode"] is JsonValue ev2)
+            errCode = ev2.ToJsonString().Trim('"');
+        bool ok = errCode == "200";
+        return (ok, errCode, ok ? "machineConnect 注册成功" : $"machineConnect errorCode={errCode}");
+    }
+
+    /// <summary>
+    /// updateSessionStatus（bundle WX 函数对齐）：**官方参数是 loginUid + loginStatus + connectList 数组**，
+    /// 不是我们之前发的 {instanceId, machineId, loginStatus, loginUid}。
+    /// connectList 每项 {connectId, connectStatus, machineId, companyCode}（bundle offset 2082432）。
+    /// </summary>
+    public static async Task<(bool Ok, string Message)> UpdateSessionStatusAsync(
+        EcloudHttpUtil http, string loginUid, int loginStatus,
+        List<(string ConnectId, bool ConnectStatus, string MachineId, string CompanyCode)> connectList,
+        CancellationToken ct = default)
+    {
+        var arr = new JsonArray();
+        foreach (var (cid, cs, mid, cc) in connectList)
+        {
+            arr.Add(new JsonObject
+            {
+                ["connectId"] = cid,
+                ["connectStatus"] = cs,
+                ["machineId"] = mid,
+                ["companyCode"] = cc,
+            });
+        }
+        var body = new JsonObject
+        {
+            ["loginUid"] = loginUid,
+            ["loginStatus"] = loginStatus,
+            ["connectList"] = arr,
+        };
+        var resp = await http.PostAsync("/session/updateSessionStatus", body, ct: ct).ConfigureAwait(false);
+        string errCode = "";
+        if (resp["data"] is JsonObject d && d["errorCode"] is JsonValue ev)
+            errCode = ev.ToJsonString().Trim('"');
+        bool ok = errCode == "200" || errCode == "";
+        return (ok, ok ? "updateSessionStatus 成功" : $"updateSessionStatus errorCode={errCode}");
+    }
+
+    /// <summary>
+    /// pfm-mng 性能数据上报（CDP 捕获对齐）：ecloud.10086.cn/api/cco-gw/pfm-mng/report/period/data/batch，
+    /// **明文 JSON 无 RSA 信封**，HMAC-SHA1 签名路径为完整 API 路径。
+    /// 平台以此判定"真实客户端连接"——防空闲回收的关键信号。
+    /// </summary>
+    public static async Task PushPfmReportAsync(
+        EcloudHttpUtil http, string accessToken, string userId, string deviceUid, string loginId,
+        string machineId, string connectId, CancellationToken ct = default)
+    {
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var payload = new JsonObject
+        {
+            ["accessToken"] = accessToken,
+            ["data"] = new JsonArray(new JsonObject
+            {
+                ["deviceUid"] = deviceUid,
+                ["loginId"] = loginId,
+                ["sampleTime"] = nowMs,
+                ["source"] = "client",
+                ["type"] = "machine.pfm",
+                ["userId"] = userId,
+                ["data"] = new JsonArray(new JsonObject
+                {
+                    ["frameRate"] = 0,
+                    ["kmOperationFlg"] = false,
+                    ["loss"] = "0.00",
+                    ["machineId"] = machineId,
+                    ["netDelay"] = 25,
+                    ["netSpeed"] = 0,
+                    ["shake"] = 0,
+                    ["totalTraffic"] = 0,
+                    ["upNetSpeed"] = 10,
+                    ["localAddr"] = "127.0.0.1:0",
+                    ["cagAddr"] = "",
+                }),
+                ["connectId"] = connectId,
+            }),
+        };
+
+        string plainJson = JsonSerializer.Serialize(payload, AppJson.Default.JsonObject);
+        string path = "/api/cco-gw/pfm-mng/report/period/data/batch";
+        var respText = await EcloudHttpUtil.PostPlainSignedAsync(
+            new HttpClient(), path, plainJson, accessToken, ct).ConfigureAwait(false);
+        if (respText.Contains("error", StringComparison.OrdinalIgnoreCase) || respText.Contains("fail", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"pfm-mng 响应异常: {respText[..Math.Min(200, respText.Length)]}");
+    }
     public static (string PasswordB64, int KeyLen) RsaEncryptPassword(string password, string rsapubText)
     {
         // 解析 "N = <hex>" / "E = <hex>"（parse_cag_rsa_public_key）

@@ -809,6 +809,32 @@ public sealed class YdpcAccountRuntime
             long hbCount = 0;
             var connectId = Guid.NewGuid().ToString();
             var nextPfmAt = DateTime.UtcNow.AddSeconds(10); // 连接后 10s 首次 pfm 上报
+            var nextMcAt = DateTime.UtcNow.AddSeconds(5);   // 连接后 5s 首次 machineConnect 注册
+
+            // ── machineConnect 注册（bundle nVe 对齐：11 参数含 ticket/flag/clientConnectId）──
+            if (EcloudHttp().AccessToken != null)
+            {
+                try
+                {
+                    var (mcOk, mcCode, mcMsg) = await EcloudZteSecurity.MachineConnectAsync(
+                        EcloudHttp(), "", EcloudHttp().AccessToken!,
+                        machineId, desk.Name, "success",
+                        connectId, _state.LoginUid, ct).ConfigureAwait(false);
+                    Log(mcOk ? "success" : "warning", $"[{desk.Name}] {mcMsg}");
+                }
+                catch (Exception mcEx) { Log("warning", $"[{desk.Name}] machineConnect 注册失败: {mcEx.Message}"); }
+            }
+
+            // ── updateSessionStatus（bundle WX 对齐：loginUid + loginStatus + connectList 数组）──
+            try
+            {
+                var (usOk, usMsg) = await EcloudZteSecurity.UpdateSessionStatusAsync(
+                    EcloudHttp(), _state.LoginUid, 1,
+                    new List<(string, bool, string, string)> { (connectId, true, machineId, "ECloud") }, ct).ConfigureAwait(false);
+                Log("info", $"[{desk.Name}] {usMsg}");
+            }
+            catch (Exception usEx) { Log("warning", $"[{desk.Name}] updateSessionStatus 失败: {usEx.Message}"); }
+
             try
             {
                 while ((DateTime.UtcNow - holdStart).TotalSeconds < holdSec)
@@ -817,19 +843,36 @@ public sealed class YdpcAccountRuntime
                     hbCount++;
                     Svc.Db.TouchPulse(Row.Id, desk.DesktopId);
 
-                    // pfm-mng 性能上报（对齐 CDP 捕获：ecloud.10086.cn/api/cco-gw/pfm-mng/report/period/data/batch，明文 JSON）
+                    // pfm-mng 性能上报（对齐 CDP 捕获：ecloud.10086.cn/api/cco-gw/pfm-mng/...，明文 JSON）
                     if (DateTime.UtcNow >= nextPfmAt)
                     {
                         nextPfmAt = DateTime.UtcNow.AddSeconds(60);
                         try
                         {
-                            await PushPfmReportAsync(desk, machineId, connectId, ct).ConfigureAwait(false);
+                            var accessToken = _state.AccessToken != "" ? _state.AccessToken : EcloudHttp().AccessToken ?? "";
+                            var userId = "";
+                            var c1 = accessToken.IndexOf(':');
+                            if (c1 >= 0) { var c2 = accessToken.IndexOf(':', c1 + 1); if (c2 > c1) userId = accessToken[(c1 + 1)..c2]; }
+                            if (userId == "") userId = Row.User;
+                            await EcloudZteSecurity.PushPfmReportAsync(
+                                EcloudHttp(), accessToken, userId, _state.DeviceUid, _state.LoginUid,
+                                machineId, connectId, ct).ConfigureAwait(false);
                             Log("info", $"[{desk.Name}] pfm-mng 上报成功");
                         }
-                        catch (Exception pfmEx)
+                        catch (Exception pfmEx) { Log("warning", $"[{desk.Name}] pfm-mng 上报失败: {pfmEx.Message}"); }
+                    }
+
+                    // updateSessionStatus 周期刷新（维持 connectList 活跃态）
+                    if (DateTime.UtcNow >= nextMcAt)
+                    {
+                        nextMcAt = DateTime.UtcNow.AddSeconds(120);
+                        try
                         {
-                            Log("warning", $"[{desk.Name}] pfm-mng 上报失败: {pfmEx.Message}");
+                            await EcloudZteSecurity.UpdateSessionStatusAsync(
+                                EcloudHttp(), _state.LoginUid, 1,
+                                new List<(string, bool, string, string)> { (connectId, true, machineId, "ECloud") }, ct).ConfigureAwait(false);
                         }
+                        catch { /* 静默信号 */ }
                     }
 
                     await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);

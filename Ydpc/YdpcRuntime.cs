@@ -251,6 +251,64 @@ public sealed class YdpcAccountRuntime
     public bool AutoBoot { get; set; } = true;
 
     /// <summary>
+    /// pfm-mng 性能数据上报（CDP 捕获对齐：ecloud.10086.cn/api/cco-gw/pfm-mng/report/period/data/batch，
+    /// **明文 JSON 无 RSA 信封**，HMAC-SHA1 签名路径为完整 API 路径）。
+    /// 平台以此判定"真实客户端连接"——这是防空闲回收的关键信号。
+    /// </summary>
+    private async Task PushPfmReportAsync(SmDesktop desk, string machineId, string connectId, CancellationToken ct)
+    {
+        string accessToken = _state.AccessToken != "" ? _state.AccessToken : EcloudHttp().AccessToken ?? "";
+        if (accessToken == "") throw new InvalidOperationException("pfm-mng 需要 accessToken（未登录）");
+
+        // userId 从 accessToken 格式 "token:<userId>:<hash>accountPwd" 解出
+        string userId = "";
+        var colon1 = accessToken.IndexOf(':');
+        if (colon1 >= 0)
+        {
+            var colon2 = accessToken.IndexOf(':', colon1 + 1);
+            if (colon2 > colon1) userId = accessToken[(colon1 + 1)..colon2];
+        }
+        if (userId == "") userId = Row.User; // 兜底
+
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var payload = new JsonObject
+        {
+            ["accessToken"] = accessToken,
+            ["data"] = new JsonArray(new JsonObject
+            {
+                ["deviceUid"] = _state.DeviceUid,
+                ["loginId"] = _state.LoginUid,
+                ["sampleTime"] = nowMs,
+                ["source"] = "client",
+                ["type"] = "machine.pfm",
+                ["userId"] = userId,
+                ["data"] = new JsonArray(new JsonObject
+                {
+                    ["frameRate"] = 0,
+                    ["kmOperationFlg"] = false,
+                    ["loss"] = "0.00",
+                    ["machineId"] = machineId,
+                    ["netDelay"] = 25,
+                    ["netSpeed"] = 0,
+                    ["shake"] = 0,
+                    ["totalTraffic"] = 0,
+                    ["upNetSpeed"] = 10,
+                    ["localAddr"] = "127.0.0.1:0",
+                    ["cagAddr"] = "",
+                }),
+                ["connectId"] = connectId,
+            }),
+        };
+
+        string plainJson = JsonSerializer.Serialize(payload, AppJson.Default.JsonObject);
+        string path = "/api/cco-gw/pfm-mng/report/period/data/batch";
+        var respText = await EcloudHttpUtil.PostPlainSignedAsync(
+            new HttpClient(), path, plainJson, accessToken, ct).ConfigureAwait(false);
+        if (respText.Contains("error", StringComparison.OrdinalIgnoreCase) || respText.Contains("fail", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"pfm-mng 响应异常: {respText[..Math.Min(200, respText.Length)]}");
+    }
+
+    /// <summary>
     /// ZTE 关机自动开机（对齐 boot_vm 的 ZTE 分支）：优先 CSAP 官方材料链
     /// （cs_startDesktop，keepalive_core._csap_start_desktop），失败回退 /cc/activate/v1。
     /// </summary>
@@ -733,9 +791,11 @@ public sealed class YdpcAccountRuntime
 
             // 会话保持覆盖整个调度间隔（减 15s 连接开销；对齐 SCG 轮口径，保持平台侧连接连续）
             int holdSec = Math.Clamp(Row.PulseIntervalSeconds - 15, 60, 3300);
-            Log("info", $"[{desk.Name}] 会话保持 {holdSec}s（每 30s 心跳+TouchPulse）…");
+            Log("info", $"[{desk.Name}] 会话保持 {holdSec}s（每 30s 心跳+TouchPulse+pfm 上报）…");
             var holdStart = DateTime.UtcNow;
             long hbCount = 0;
+            var connectId = Guid.NewGuid().ToString();
+            var nextPfmAt = DateTime.UtcNow.AddSeconds(10); // 连接后 10s 首次 pfm 上报
             try
             {
                 while ((DateTime.UtcNow - holdStart).TotalSeconds < holdSec)
@@ -743,6 +803,22 @@ public sealed class YdpcAccountRuntime
                     await session.HeartbeatAsync(ct).ConfigureAwait(false);
                     hbCount++;
                     Svc.Db.TouchPulse(Row.Id, desk.DesktopId);
+
+                    // pfm-mng 性能上报（对齐 CDP 捕获：ecloud.10086.cn/api/cco-gw/pfm-mng/report/period/data/batch，明文 JSON）
+                    if (DateTime.UtcNow >= nextPfmAt)
+                    {
+                        nextPfmAt = DateTime.UtcNow.AddSeconds(60);
+                        try
+                        {
+                            await PushPfmReportAsync(desk, machineId, connectId, ct).ConfigureAwait(false);
+                            Log("info", $"[{desk.Name}] pfm-mng 上报成功");
+                        }
+                        catch (Exception pfmEx)
+                        {
+                            Log("warning", $"[{desk.Name}] pfm-mng 上报失败: {pfmEx.Message}");
+                        }
+                    }
+
                     await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
                 }
                 Log("success", $"[{desk.Name}] ✅ ECLOUD 会话保持完成 ({holdSec}s, {hbCount} 心跳) —— 平台侧应已产生连接记录");

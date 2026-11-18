@@ -265,6 +265,38 @@ public sealed class EcloudHttpUtil : IDisposable
         return HandleResponse(raw, (int)resp.StatusCode, endpoint);
     }
 
+    /// <summary>
+    /// 明文 JSON POST 到任意已签名的 CCO-GW 路径（对齐 pfm-mng 捕获：body **无 RSA 信封**，
+    /// 签名路径为完整 API 路径 e.g. /api/cco-gw/pfm-mng/report/period/data/batch）。
+    /// </summary>
+    public static async Task<string> PostPlainSignedAsync(
+        HttpClient http, string fullPath, string plainJson, string accessToken, CancellationToken ct = default)
+    {
+        string timestamp = DateTimeOffset.UtcNow
+            .ToOffset(TimeSpan.FromHours(8))
+            .ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        string nonce = Guid.NewGuid().ToString("N");
+        string canonical =
+            "AccessKey=" + Uri.EscapeDataString(EcloudCredentials.Load().AccessKey) +
+            "&SignatureMethod=" + Uri.EscapeDataString(EcloudConfig.SignMethod) +
+            "&SignatureNonce=" + Uri.EscapeDataString(nonce) +
+            "&SignatureVersion=" + Uri.EscapeDataString(EcloudConfig.SignVersion) +
+            "&Timestamp=" + Uri.EscapeDataString(timestamp);
+        string encodedPath = Uri.EscapeDataString(fullPath);
+        string stringToSign = "POST\n" + encodedPath + "\n" + EcloudCrypto.Sha256Hex(canonical);
+        string signature = EcloudCrypto.HmacSha1Hex(stringToSign, EcloudConfig.HmacKeyPrefix + EcloudCredentials.Load().SecretKey);
+        string url = "https://ecloud.10086.cn" + fullPath + "?" + canonical + "&Signature=" + signature;
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(plainJson, Encoding.UTF8, "application/json"),
+        };
+        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + accessToken);
+        req.Headers.TryAddWithoutValidation("User-Agent", EcloudConfig.UserAgent);
+        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+        return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+    }
+
     /// <summary>登录类接口：主域名失败按 BACKUP_DOMAINS 重试（对齐 post_with_failover）。</summary>
     public async Task<JsonObject> PostWithFailoverAsync(string endpoint, JsonObject? payload = null, CancellationToken ct = default)
     {

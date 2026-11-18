@@ -248,6 +248,23 @@ public sealed class EcloudDesktopSession
         !string.IsNullOrEmpty(s) && s != "None" &&
         (s.Contains("小时", StringComparison.Ordinal) || s.Contains("分", StringComparison.Ordinal) || s.Contains("秒", StringComparison.Ordinal));
 
+    /// <summary>
+    /// 断连自动关机时长设置：POST /user/setShutDownTime {instanceId, shutdownTime}。
+    /// shutdownTime 合法值："从不"/"0分钟"/"30分钟"/"1小时" 等（官方客户端"设置-断连关机"面板
+    /// 同名接口，参数结构从 app.asar 提取）。响应 {"errorCode":"200"} = 成功。
+    /// </summary>
+    public async Task<bool> SetShutdownTimeAsync(string shutdownTime, CancellationToken ct = default)
+    {
+        var resp = await _http.PostAsync(EcloudConfig.Endpoints.SetShutdownTime, new JsonObject
+        {
+            ["instanceId"] = InstanceId,
+            ["shutdownTime"] = shutdownTime,
+        }, ct: ct).ConfigureAwait(false);
+        if (resp["errorCode"] is JsonValue v && v.TryGetValue<string>(out var code))
+            return code == "200";
+        return true;
+    }
+
 
     /// <summary>
     /// 会话状态续期（静默信号 A）：POST /session/updateSessionStatus ——

@@ -108,6 +108,10 @@ public static class EcloudConfig
         public const string GetDesktopStatus = "/user/getDesktopStatus";
         public const string ResourceOperate = "/resource/operate";
         public const string UpdateSessionStatus = "/session/updateSessionStatus";
+
+        // 断连自动关机时长设置（官方客户端"设置-断连关机"面板同名接口）
+        // shutdownTime 合法值: "从不" / "0分钟" / "30分钟" / "1小时" 等
+        public const string SetShutdownTime = "/user/setShutDownTime";
     }
 
     /// <summary>登录错误码（config.py class LoginError）。</summary>

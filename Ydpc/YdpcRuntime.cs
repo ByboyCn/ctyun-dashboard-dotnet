@@ -724,6 +724,17 @@ public sealed class YdpcAccountRuntime
                 }
                 Log("success", $"[{desk.Name}] L2 桌面登记成功{(ds.LastUptime != "" ? $" · 在线时长 {ds.LastUptime}" : "")}");
                 l2Lines.Add($"✅ {desk.Name}" + (ds.LastUptime != "" ? $"（在线 {ds.LastUptime}）" : ""));
+                // 断连自动关机策略 → "从不"（官方 /user/setShutDownTime，参数结构从 app.asar 提取）
+                // 每轮幂等设置一次：平台侧策略即使被重置也会被改回
+                try
+                {
+                    bool set = await ds.SetShutdownTimeAsync("从不", ct).ConfigureAwait(false);
+                    Log(set ? "success" : "warning", $"[{desk.Name}] 断连自动关机时长 → 从不：{(set ? "已接受" : "平台未确认 errorCode=200")}");
+                }
+                catch (Exception ex)
+                {
+                    Log("warning", $"[{desk.Name}] 断连关机时长设置失败: {ex.Message}");
+                }
             }
             else
             {

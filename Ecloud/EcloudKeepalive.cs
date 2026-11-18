@@ -249,16 +249,16 @@ public sealed class EcloudDesktopSession
         (s.Contains("小时", StringComparison.Ordinal) || s.Contains("分", StringComparison.Ordinal) || s.Contains("秒", StringComparison.Ordinal));
 
     /// <summary>
-    /// 断连自动关机时长设置：POST /user/setShutDownTime {instanceId, shutdownTime}。
-    /// shutdownTime 合法值："从不"/"0分钟"/"30分钟"/"1小时" 等（官方客户端"设置-断连关机"面板
-    /// 同名接口，参数结构从 app.asar 提取）。响应 {"errorCode":"200"} = 成功。
+    /// 断连自动关机时长设置：POST /user/setShutDownTime {instanceId, accessToken(自动合并), shutdownTime}。
+    /// shutdownTime = 数字分钟数（官方下拉框 value：0=从不 / 1..30=分钟数 / …）——
+    /// 传中文标签会得到 500 未知异常（服务端按数字解析）。参数结构从 app.asar 提取。
     /// </summary>
-    public async Task<bool> SetShutdownTimeAsync(string shutdownTime, CancellationToken ct = default)
+    public async Task<bool> SetShutdownTimeAsync(string shutdownTimeMinutes, CancellationToken ct = default)
     {
         var resp = await _http.PostAsync(EcloudConfig.Endpoints.SetShutdownTime, new JsonObject
         {
             ["instanceId"] = InstanceId,
-            ["shutdownTime"] = shutdownTime,
+            ["shutdownTime"] = shutdownTimeMinutes,
         }, ct: ct).ConfigureAwait(false);
         if (resp["errorCode"] is JsonValue v && v.TryGetValue<string>(out var code))
             return code == "200";

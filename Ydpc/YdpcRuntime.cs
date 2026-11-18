@@ -766,8 +766,8 @@ public sealed class YdpcAccountRuntime
 
             if (!conn.Ok)
             {
-                Log("error", $"[{desk.Name}] ECLOUD 连接材料获取失败: {conn.Error} (dataKeys={conn.DataKeys})");
-                connectLines.Add($"⚠️ {desk.Name}（材料探查失败，见日志）");
+                // 已知未解研究项：ECLOUD 连接材料端点未破解——只落日志，不推渠道（避免每轮刷屏）
+                Log("warning", $"[{desk.Name}] ECLOUD 连接材料获取失败（研究项，不影响 L1/L2 保活）: {conn.Error}");
                 continue;
             }
             Log("info", $"[{desk.Name}] 连接材料已获取 (source={conn.Source} inner={conn.Inner!.Host}:{conn.Inner.Port} vmId={conn.Inner.VmId[..Math.Min(12, conn.Inner.VmId.Length)]}… dataKeys={conn.DataKeys})");

@@ -679,10 +679,89 @@ public sealed class YdpcAccountRuntime
             }
         }
 
+        // ── ECLOUD 真实连接 + 会话保持（每台串行错峰；紧急任务：防平台空闲回收）──────
+        // 平台回收依据 = 真实客户端连接会话（客服确认"无客户端连接记录"）。
+        // L2 desktopUptime/静默信号 A/B 都不被平台当作使用中，必须建立真实连接会话。
+        var connectLines = new List<string>();
+        foreach (var desk in Svc.Db.DesktopsOf(Row.Id).Where(d => d.KeepaliveEnabled))
+        {
+            ct.ThrowIfCancellationRequested();
+            var (machineId, _) = ParseDesktopRaw(desk.RawJson);
+            var instanceId = desk.DesktopId;
+            Log("info", $"[{desk.Name}] 开始 ECLOUD 连接建立（machineId={machineId[..Math.Min(16, machineId.Length)]}…）");
+
+            var conn = await EcloudConnect.ConnectAsync(EcloudHttp(), machineId, instanceId, desk.Name, ct).ConfigureAwait(false);
+            foreach (var t in conn.ProbeTrail) Log("info", $"[{desk.Name}] [probe] {t}");
+
+            if (!conn.Ok)
+            {
+                Log("error", $"[{desk.Name}] ECLOUD 连接材料获取失败: {conn.Error} (dataKeys={conn.DataKeys})");
+                connectLines.Add($"⚠️ {desk.Name}（材料探查失败，见日志）");
+                continue;
+            }
+            Log("info", $"[{desk.Name}] 连接材料已获取 (source={conn.Source} inner={conn.Inner!.Host}:{conn.Inner.Port} vmId={conn.Inner.VmId[..Math.Min(12, conn.Inner.VmId.Length)]}… dataKeys={conn.DataKeys})");
+
+            // ZTEC CAG TCP 认证（控制面：服务端看到 = 有客户端发起连接）
+            CagSession? session = null;
+            string sessionMsg;
+            bool haveOuter = conn.OuterHost != "" && conn.OuterPort > 0;
+            if (haveOuter)
+            {
+                Log("info", $"[{desk.Name}] 通过外层 CAG {conn.OuterHost}:{conn.OuterPort} 发起 ZTEC 认证…");
+                var (ok, msg, sess) = await EcloudConnect.ZtecAuthAsync(
+                    conn.OuterHost, conn.OuterPort, conn.Inner!, conn.Username, conn.Password, 15000, ct).ConfigureAwait(false);
+                sessionMsg = msg;
+                if (ok) { session = sess; Log("success", $"[{desk.Name}] ✅ {msg}"); }
+                else Log("error", $"[{desk.Name}] ❌ {msg}");
+            }
+            else
+            {
+                // 无外层 CAG（平台未下发）→ 直接对 inner 地址发起认证（ZTEC 可工作在直连模式）
+                Log("info", $"[{desk.Name}] 平台未下发外层 CAG，直连 inner {conn.Inner!.Host}:{conn.Inner.Port} 发起 ZTEC 认证…");
+                var (ok, msg, sess) = await EcloudConnect.ZtecAuthAsync(
+                    conn.Inner!.Host, conn.Inner.Port, conn.Inner, conn.Username, conn.Password, 15000, ct).ConfigureAwait(false);
+                sessionMsg = msg;
+                if (ok) { session = sess; Log("success", $"[{desk.Name}] ✅ {msg}"); }
+                else Log("error", $"[{desk.Name}] ❌ {msg}");
+            }
+
+            if (session == null)
+            {
+                connectLines.Add($"❌ {desk.Name}（{sessionMsg}）");
+                continue;
+            }
+
+            // 会话保持覆盖整个调度间隔（减 15s 连接开销；对齐 SCG 轮口径，保持平台侧连接连续）
+            int holdSec = Math.Clamp(Row.PulseIntervalSeconds - 15, 60, 3300);
+            Log("info", $"[{desk.Name}] 会话保持 {holdSec}s（每 30s 心跳+TouchPulse）…");
+            var holdStart = DateTime.UtcNow;
+            long hbCount = 0;
+            try
+            {
+                while ((DateTime.UtcNow - holdStart).TotalSeconds < holdSec)
+                {
+                    await session.HeartbeatAsync(ct).ConfigureAwait(false);
+                    hbCount++;
+                    Svc.Db.TouchPulse(Row.Id, desk.DesktopId);
+                    await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+                }
+                Log("success", $"[{desk.Name}] ✅ ECLOUD 会话保持完成 ({holdSec}s, {hbCount} 心跳) —— 平台侧应已产生连接记录");
+                connectLines.Add($"✅ {desk.Name}（会话 {holdSec}s，{hbCount} 心跳）");
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception e)
+            {
+                Log("warning", $"[{desk.Name}] 会话保持中断: {e.Message}");
+                connectLines.Add($"⚠️ {desk.Name}（会话中断: {e.Message}）");
+            }
+            finally { await session.DisposeAsync().ConfigureAwait(false); }
+        }
+
         // ── 保活轮完成 → 企业微信等渠道推送（NotifyHub 按系统设置分发）──────
         var l1Text = outcome.Ok == true ? "✅ 通过" : outcome.Ok == false ? "❌ token 失效" : "⚠️ 端点失败";
         var body = $"L1 账号探针 {l1Text}";
         if (l2Lines.Count > 0) body += "\n" + string.Join("\n", l2Lines);
+        if (connectLines.Count > 0) body += "\n" + string.Join("\n", connectLines);
         body += $"\n下次保活: {Math.Clamp(Row.PulseIntervalSeconds, 60, 604800) / 3600.0:0.#} 小时后";
         _ = Svc.NotifyHubField.SendAsync(Row.Name, $"移动云保活完成 - {Row.Name}", body);
     }

@@ -983,6 +983,13 @@ public sealed class YdpcAccountRuntime
             if (!ok) throw new InvalidOperationException("重登失败: " + msg);
             desks = await EcloudDesktops.GetDesktopsWithStatusAsync(EcloudHttp(), ct).ConfigureAwait(false);
         }
+        // 一次性诊断：machineStatusList 全量 dump（machineOperateMap 可能含连接操作定义/ticket）
+        var mslDump = EcloudDesktops.LastMachineStatusDump;
+        if (mslDump != null)
+        {
+            Log("info", $"[诊断] machineStatusList[0]: {mslDump}");
+            EcloudDesktops.ClearMachineStatusDump();
+        }
         var mapped = desks.Select(d => (
             Id: d.InstanceId,
             Name: d.MachineName != "" ? d.MachineName : d.InstanceId,
